@@ -25,7 +25,7 @@ mise run update-vendor  # re-download assets/vendor/* (MERMAID_VERSION / GH_MD_C
 
 Standard `cargo build`, `cargo clippy`, `cargo fmt`, `cargo test` apply. Tests are inline `#[cfg(test)]` modules (currently only `render.rs`). Run one with `cargo test <name_substring>`.
 
-To try a change manually: `cargo run -- path/to/file.md`. On Unix the process forks and the parent exits immediately, so the server runs detached in the background. It prints the URL only when stdout is a TTY, and exits on its own ~15s after the last browser tab closes. Kill stray servers with `pkill mdpreview`.
+To try a change manually: `cargo run -- examples/<file>.md`. `examples/` holds fixed lorem ipsum fixtures: `basics.md` (GFM, front matter, raw HTML), `mermaid.md` (one of each diagram type plus a deliberately invalid one) and `front-matter.md` (escaping and edge cases). On Unix the process forks and the parent exits immediately, so the server runs detached in the background. It prints the URL only when stdout is a TTY, and exits on its own ~15s after the last browser tab closes. Kill stray servers with `pkill mdpreview`.
 
 ## Architecture
 
