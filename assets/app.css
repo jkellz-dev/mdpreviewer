@@ -1,0 +1,33 @@
+:root {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background: #0d1117;
+}
+
+/*
+ * github-markdown.css styles the .markdown-body element itself; here we only
+ * constrain its width and give it breathing room within the page.
+ */
+.markdown-body {
+  box-sizing: border-box;
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 2.5rem 1.5rem 6rem;
+}
+
+/* Rendered mermaid diagrams: centered, transparent, and scaled to fit. */
+pre.mermaid,
+.mermaid {
+  background: transparent;
+  text-align: center;
+  overflow: visible;
+}
+
+pre.mermaid svg,
+.mermaid svg {
+  max-width: 100%;
+  height: auto;
+}

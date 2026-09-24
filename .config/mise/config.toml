@@ -1,0 +1,19 @@
+[tools]
+rust = "latest"
+
+[tasks.build]
+description = "Build the release binary"
+run = "cargo build --release"
+
+[tasks.install]
+description = "Build and symlink mdpreview into ~/.local/bin"
+depends = ["build"]
+run = '''
+mkdir -p "$HOME/.local/bin"
+ln -sf "$MISE_PROJECT_ROOT/target/release/mdpreview" "$HOME/.local/bin/mdpreview"
+echo "Linked $HOME/.local/bin/mdpreview -> $MISE_PROJECT_ROOT/target/release/mdpreview"
+'''
+
+[tasks.update-vendor]
+description = "Re-download vendored mermaid + github-markdown assets"
+run = "sh scripts/update-vendor.sh"
