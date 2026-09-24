@@ -3,7 +3,7 @@
 # theme). Versions can be overridden via environment variables.
 set -eu
 
-MERMAID_VERSION="${MERMAID_VERSION:-11.4.1}"
+MERMAID_VERSION="${MERMAID_VERSION:-11.17.2}"
 GH_MD_CSS_VERSION="${GH_MD_CSS_VERSION:-5.8.1}"
 
 root="$(cd "$(dirname "$0")/.." && pwd)"

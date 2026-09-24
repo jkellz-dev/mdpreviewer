@@ -42,7 +42,7 @@ Request/reload flow across the four modules:
 
 **Client (`assets/app.js`)**: on load and on every SSE message, it fetches `/content`, swaps it into `#content`, converts `code.language-mermaid` blocks to `<pre class="mermaid">`, calls `mermaid.run`, and restores the scroll position. Mermaid rendering happens entirely in the browser.
 
-**Assets are embedded at compile time** (`include_str!` / `include_bytes!` in `server.rs`). Adding a new asset requires both a `const` and a route in `handle()`. `assets/vendor/` holds pinned third-party files (mermaid 11.4.1, github-markdown-css dark 5.8.1). Update them with the script rather than editing by hand.
+**Assets are embedded at compile time** (`include_str!` / `include_bytes!` in `server.rs`). Adding a new asset requires both a `const` and a route in `handle()`. `assets/vendor/` holds pinned third-party files (mermaid 11.17.2, github-markdown-css dark 5.8.1). Update them with the script rather than editing by hand.
 
 ## Version control
 

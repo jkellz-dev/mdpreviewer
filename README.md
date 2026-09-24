@@ -48,7 +48,7 @@ cargo build --release
 The browser assets are vendored under `assets/vendor/` so the tool works
 offline and pins known-good versions:
 
-- `mermaid.min.js` (mermaid, default 11.4.1)
+- `mermaid.min.js` (mermaid, default 11.17.2)
 - `github-markdown.css` (github-markdown-css dark, default 5.8.1)
 
 Refresh them with `mise run update-vendor` (or `sh scripts/update-vendor.sh`).
