@@ -23,7 +23,7 @@ mise run install        # build + symlink target/release/mdpreview into ~/.local
 mise run update-vendor  # re-download assets/vendor/* (MERMAID_VERSION / GH_MD_CSS_VERSION override)
 ```
 
-Standard `cargo build`, `cargo clippy`, `cargo fmt` apply. There are no tests yet (`cargo test` runs nothing).
+Standard `cargo build`, `cargo clippy`, `cargo fmt`, `cargo test` apply. Tests are inline `#[cfg(test)]` modules (currently only `render.rs`). Run one with `cargo test <name_substring>`.
 
 To try a change manually: `cargo run -- path/to/file.md`. On Unix the process forks and the parent exits immediately, so the server runs detached in the background. It prints the URL only when stdout is a TTY, and exits on its own ~15s after the last browser tab closes. Kill stray servers with `pkill mdpreview`.
 
@@ -38,7 +38,7 @@ Request/reload flow across the four modules:
    - `/events` bypasses tiny_http's buffered chunked writer (`request.into_writer()`) and writes raw SSE with a flush after every event. A 10s heartbeat lets it detect dead sockets.
    - A monitor thread exits the process once the active SSE count (tracked by the `ActiveGuard` RAII type) has been 0 for 15s. It only arms after the first client has connected.
    - `/content` re-reads and re-renders the file on every request. There is no caching.
-4. **`render.rs`** uses comrak with GFM extensions and `render.unsafe = true`, so raw HTML passes through; this is intentional for a local-only preview. Mermaid fences stay as `<pre><code class="language-mermaid">`.
+4. **`render.rs`** uses comrak with GFM extensions and `render.unsafe = true`, so raw HTML passes through; this is intentional for a local-only preview. Mermaid fences stay as `<pre><code class="language-mermaid">`. `---` front matter is parsed via comrak's `front_matter_delimiter`. comrak outputs nothing for that node, so `render.rs` prepends it as a collapsed `<details class="frontmatter">` YAML block.
 
 **Client (`assets/app.js`)**: on load and on every SSE message, it fetches `/content`, swaps it into `#content`, converts `code.language-mermaid` blocks to `<pre class="mermaid">`, calls `mermaid.run`, and restores the scroll position. Mermaid rendering happens entirely in the browser.
 

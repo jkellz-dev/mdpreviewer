@@ -31,3 +31,19 @@ pre.mermaid svg,
   max-width: 100%;
   height: auto;
 }
+
+/* Front matter: a muted, collapsed YAML block above the document body. */
+.markdown-body details.frontmatter {
+  margin-bottom: 1.5rem;
+  /* Same muted grey the vendored theme uses for blockquotes. */
+  color: #9198a1;
+  font-size: 85%;
+}
+
+.markdown-body details.frontmatter summary {
+  cursor: pointer;
+}
+
+.markdown-body details.frontmatter pre {
+  margin: 0.5rem 0 0;
+}
