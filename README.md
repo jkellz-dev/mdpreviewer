@@ -189,6 +189,12 @@ x86_64 binaries.
 Publishing needs a `CARGO_REGISTRY_TOKEN` repository secret holding a crates.io
 token with the `publish-new` and `publish-update` scopes.
 
+Release immutability has to stay off in the repository settings. release-plz
+publishes the release first and the `binaries` job attaches the archives to it
+a minute later, which an immutable release rejects with
+`HTTP 422: Cannot upload assets to an immutable release`. Turning the setting
+off only affects later releases; one already sealed stays sealed.
+
 Before pushing, rehearse locally:
 
 ```sh
