@@ -1,5 +1,6 @@
 [tools]
 rust = "latest"
+release-plz = "latest"
 
 [tasks.build]
 description = "Build the release binary"
@@ -17,3 +18,48 @@ echo "Linked $HOME/.local/bin/mdpreviewer -> $MISE_PROJECT_ROOT/target/release/m
 [tasks.update-vendor]
 description = "Re-download vendored mermaid + github-markdown assets"
 run = "sh scripts/update-vendor.sh"
+
+[tasks."release:check"]
+description = "Everything the release workflow checks, before pushing"
+run = '''
+set -e
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test --all-targets
+# --allow-dirty because in this colocated jj repo the git worktree only
+# catches up with the working copy when a jj command snapshots it.
+cargo package --locked --allow-dirty
+echo "release:check ok"
+'''
+
+[tasks."release:preview"]
+description = "Show the next version and changelog release-plz would produce"
+run = "release-plz update --allow-dirty && git --no-pager diff -- CHANGELOG.md Cargo.toml"
+
+[tasks."release:pr"]
+description = "Open or update the release PR on GitHub (needs a GitHub token)"
+run = '''
+set -e
+token="${GITHUB_TOKEN:-$(gh auth token 2>/dev/null || true)}"
+: "${token:?no GitHub token: run gh auth login or set GITHUB_TOKEN}"
+release-plz release-pr --git-token "$token"
+'''
+
+[tasks."release:publish-dry-run"]
+description = "Rehearse the publish without touching crates.io or GitHub"
+run = '''
+set -e
+token="${GITHUB_TOKEN:-$(gh auth token 2>/dev/null || true)}"
+: "${token:?no GitHub token: run gh auth login or set GITHUB_TOKEN}"
+release-plz release --dry-run --git-token "$token"
+'''
+
+[tasks."release:publish"]
+description = "Publish to crates.io, tag, and create the GitHub release"
+run = '''
+set -e
+: "${CARGO_REGISTRY_TOKEN:?set CARGO_REGISTRY_TOKEN to a crates.io token with publish-new and publish-update}"
+token="${GITHUB_TOKEN:-$(gh auth token 2>/dev/null || true)}"
+: "${token:?no GitHub token: run gh auth login or set GITHUB_TOKEN}"
+release-plz release --git-token "$token"
+'''

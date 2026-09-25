@@ -44,15 +44,15 @@ the open tab switches to the new file. A new tab opens only if none is open.
 Click a mermaid diagram, an image, a table or a code block to blow it up to
 fill the window. In the overlay:
 
-| Input | Effect |
-| --- | --- |
-| scroll wheel | zoom in or out around the pointer |
-| drag | pan |
-| `0` | fit to the window again |
-| `+` / `-` | zoom from the centre |
-| double-click | toggle between fitting the window and the document's scale |
-| `f` | true browser fullscreen |
-| `esc`, the `×`, or a click outside | close |
+| Input                              | Effect                                                     |
+| ---------------------------------- | ---------------------------------------------------------- |
+| scroll wheel                       | zoom in or out around the pointer                          |
+| drag                               | pan                                                        |
+| `0`                                | fit to the window again                                    |
+| `+` / `-`                          | zoom from the centre                                       |
+| double-click                       | toggle between fitting the window and the document's scale |
+| `f`                                | true browser fullscreen                                    |
+| `esc`, the `×`, or a click outside | close                                                      |
 
 Links are left alone, so a linked image follows its link, and clicking after
 selecting text does not zoom. The overlay follows live reloads: saving the
@@ -85,12 +85,12 @@ r = { command = [":w", ':sh mdpreviewer --restart --line %{cursor_line} "%{buffe
 q = { command = ":sh mdpreviewer --quit", label = "Quit preview server" }
 ```
 
-| Key    | Does                                                                |
-| ------ | ------------------------------------------------------------------- |
-| `C-s`  | Save, then scroll the preview to the cursor. Runs on every save.      |
-| `\mm` | Save, then start the preview or point the running one at this file    |
-| `\mr` | Save, then restart the server and open this file                      |
-| `\mq` | Stop the server                                                       |
+| Key   | Does                                                               |
+| ----- | ------------------------------------------------------------------ |
+| `C-s` | Save, then scroll the preview to the cursor. Runs on every save.   |
+| `\mm` | Save, then start the preview or point the running one at this file |
+| `\mr` | Save, then restart the server and open this file                   |
+| `\mq` | Stop the server                                                    |
 
 Helix has no per-filetype keymaps, so these run in every buffer. `mdpreviewer`
 only acts on `.md` and `.markdown` files; anywhere else it refuses with
@@ -116,7 +116,16 @@ from the previous server stops updating; close it.
 
 ## Building and installing
 
-This repo uses [mise](https://mise.jdx.dev/) for tasks:
+Install the published binary with cargo:
+
+```sh
+cargo install mdpreviewer
+```
+
+Prebuilt macOS and Linux binaries are attached to each
+[release](https://github.com/jkellz-dev/mdpreviewer/releases).
+
+To build from a clone, this repo uses [mise](https://mise.jdx.dev/) for tasks:
 
 ```sh
 mise run build          # cargo build --release
@@ -128,6 +137,25 @@ Or with cargo directly:
 
 ```sh
 cargo build --release
+```
+
+## Releasing
+
+[release-plz](https://release-plz.dev/) runs on every push to `main`. It keeps a
+pull request open that bumps the version and writes `CHANGELOG.md` from the
+Conventional Commit messages. Merging that PR publishes the crate to crates.io,
+tags the commit, creates the GitHub release, and attaches macOS arm64 and Linux
+x86_64 binaries.
+
+Publishing needs a `CARGO_REGISTRY_TOKEN` repository secret holding a crates.io
+token with the `publish-new` and `publish-update` scopes.
+
+Before pushing, rehearse locally:
+
+```sh
+mise run release:check           # lint, test, and package the crate
+mise run release:preview         # show the version bump and changelog
+mise run release:publish-dry-run # rehearse the publish, changing nothing
 ```
 
 ## Vendored assets

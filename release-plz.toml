@@ -1,0 +1,33 @@
+[[package]]
+name = "mdpreviewer"
+# The crate ships a binary and has no library API, so an API-compatibility
+# check has nothing to compare and only slows the release down.
+semver_check = false
+
+[changelog]
+# Keep a Changelog style, with the commit types this repo actually uses.
+protect_breaking_commits = true
+
+[[changelog.commit_parsers]]
+message = "^feat"
+group = "Added"
+
+[[changelog.commit_parsers]]
+message = "^fix"
+group = "Fixed"
+
+[[changelog.commit_parsers]]
+message = "^perf"
+group = "Performance"
+
+[[changelog.commit_parsers]]
+message = "^doc"
+group = "Documentation"
+
+[[changelog.commit_parsers]]
+message = "^refactor"
+group = "Changed"
+
+[[changelog.commit_parsers]]
+message = "^(test|chore|ci|build|style)"
+skip = true
