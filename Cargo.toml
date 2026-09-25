@@ -2,6 +2,22 @@
 name = "mdpreviewer"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
+description = "Live-reloading browser preview for a single Markdown file, with mermaid diagrams and cursor sync for Helix."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jkellz-dev/mdpreviewer"
+homepage = "https://github.com/jkellz-dev/mdpreviewer"
+readme = "README.md"
+keywords = ["markdown", "preview", "helix", "mermaid", "live-reload"]
+categories = ["command-line-utilities", "text-processing", "development-tools"]
+include = [
+    "src/**/*.rs",
+    "assets/**",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE-MIT",
+    "LICENSE-APACHE",
+]
 
 [dependencies]
 comrak = "0.55.0"
