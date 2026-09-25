@@ -2,7 +2,9 @@
 name = "mdpreviewer"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+# The floor is set by the bon and darling dependencies, which require 1.88.
+# Verified with `cargo +1.88 check --all-targets --locked`.
+rust-version = "1.88"
 description = "Live-reloading browser preview for a single Markdown file, with mermaid diagrams and cursor sync for Helix."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/jkellz-dev/mdpreviewer"
