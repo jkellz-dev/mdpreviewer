@@ -573,6 +573,35 @@ mod integration_tests {
             events
         }
 
+        /// Drain whatever is already queued, then wait for the stream to fall
+        /// quiet. The watcher can emit a `reload` for the write that set the
+        /// fixture up, because that write happens before the watch starts and
+        /// macOS delivers such events to a stream created just afterwards.
+        /// That reload is unrelated to what the open-request tests assert, so
+        /// tests that expect a specific first frame settle the stream first.
+        fn settle(&mut self) {
+            const QUIET: Duration = Duration::from_millis(250);
+            self.stream.set_read_timeout(Some(QUIET)).unwrap();
+            let mut chunk = [0u8; 1024];
+            loop {
+                match self.stream.read(&mut chunk) {
+                    Ok(0) => panic!("event stream closed"),
+                    Ok(_) => continue,
+                    Err(err)
+                        if matches!(
+                            err.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                        ) =>
+                    {
+                        break;
+                    }
+                    Err(err) => panic!("event stream read failed: {err}"),
+                }
+            }
+            self.buf.clear();
+            self.stream.set_read_timeout(Some(WAIT)).unwrap();
+        }
+
         fn fill(&mut self) {
             let mut chunk = [0u8; 1024];
             let n = self
@@ -605,6 +634,7 @@ mod integration_tests {
         fs::write(&a, "# A\n").unwrap();
         let preview = start(&dir, &a);
         let mut events = Events::connect(&preview);
+        events.settle();
 
         let reply = open(&preview, &a, Some(3));
         assert_eq!(
