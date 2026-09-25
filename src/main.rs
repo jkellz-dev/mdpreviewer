@@ -35,6 +35,16 @@ const USAGE: &str = "usage: mdpreviewer [--line N] [--no-open] <file.md>\n      
                      mdpreviewer --restart [--line N] [--no-open] <file.md>\n       \
                      mdpreviewer --quit";
 
+/// Printed under [`USAGE`] by `--help`.
+const OPTIONS: &str = "options:
+      --line N     scroll the preview to line N
+      --no-open    start the server without opening a browser tab
+      --sync       only update a running preview, and say nothing
+      --restart    stop a running preview, then open a new one
+      --quit       stop a running preview
+  -h, --help       show this help
+  -V, --version    show the version";
+
 /// Exit the server this long after the last browser tab closes.
 const IDLE_GRACE: Duration = Duration::from_secs(15);
 
@@ -75,8 +85,51 @@ struct Args {
     no_open: bool,
 }
 
+/// An option that answers and exits, without starting or contacting a server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EarlyExit {
+    Help,
+    Version,
+}
+
+impl EarlyExit {
+    /// What to print. Both go to stdout: they were asked for, unlike the URL,
+    /// which stays quiet unless stdout is a terminal because an editor running
+    /// this as a shell command would show it in a popup. No editor binding
+    /// passes these.
+    fn message(self) -> String {
+        match self {
+            EarlyExit::Help => format!("{USAGE}\n\n{OPTIONS}"),
+            EarlyExit::Version => {
+                format!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))
+            }
+        }
+    }
+}
+
+/// Look for an option that should answer straight away.
+///
+/// These are found before the arguments are parsed, so `--help` explains
+/// itself even when the rest of the command line is wrong, which is when it is
+/// most worth having. Help beats version wherever the two appear.
+fn early_exit(raw: &[String]) -> Option<EarlyExit> {
+    let mut found = None;
+    for arg in raw {
+        match arg.as_str() {
+            "-h" | "--help" => return Some(EarlyExit::Help),
+            "-V" | "--version" => found = Some(EarlyExit::Version),
+            _ => {}
+        }
+    }
+    found
+}
+
 fn main() {
     let raw: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(early) = early_exit(&raw) {
+        println!("{}", early.message());
+        process::exit(0);
+    }
     let args = match parse_args(raw.iter().cloned()) {
         Ok(args) => args,
         // Sync mode runs on every save; it never complains.
@@ -500,11 +553,68 @@ fn run_server(listener: TcpListener, file: PathBuf, config: server::Config) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Args, Mode, expand_tilde, is_markdown, page_url, parse_args};
+    use super::{
+        Args, EarlyExit, Mode, early_exit, expand_tilde, is_markdown, page_url, parse_args,
+    };
     use std::path::PathBuf;
 
     fn parse(args: &[&str]) -> Result<Args, String> {
         parse_args(args.iter().map(|arg| arg.to_string()))
+    }
+
+    fn early(args: &[&str]) -> Option<EarlyExit> {
+        let raw: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
+        early_exit(&raw)
+    }
+
+    #[test]
+    fn help_and_version_are_recognised_in_both_spellings() {
+        assert_eq!(early(&["--help"]), Some(EarlyExit::Help));
+        assert_eq!(early(&["-h"]), Some(EarlyExit::Help));
+        assert_eq!(early(&["--version"]), Some(EarlyExit::Version));
+        assert_eq!(early(&["-V"]), Some(EarlyExit::Version));
+        assert_eq!(early(&["notes.md"]), None);
+        assert_eq!(early(&[]), None);
+    }
+
+    /// Asking what the options are should answer, not complain, which is the
+    /// whole reason these are found before the arguments are parsed.
+    #[test]
+    fn help_wins_over_bad_arguments_and_over_version() {
+        assert!(parse(&["--nonsense"]).is_err());
+        assert_eq!(early(&["--nonsense", "--help"]), Some(EarlyExit::Help));
+        assert_eq!(early(&["--line"]), None);
+        assert_eq!(early(&["--version", "--help"]), Some(EarlyExit::Help));
+        assert_eq!(early(&["--help", "--version"]), Some(EarlyExit::Help));
+    }
+
+    #[test]
+    fn the_version_message_names_the_crate_and_its_version() {
+        let message = EarlyExit::Version.message();
+        assert!(message.starts_with("mdpreviewer "), "{message}");
+        assert!(
+            message.trim_end().ends_with(env!("CARGO_PKG_VERSION")),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn the_help_message_shows_every_option_the_parser_accepts() {
+        let message = EarlyExit::Help.message();
+        for option in [
+            "--line",
+            "--no-open",
+            "--sync",
+            "--restart",
+            "--quit",
+            "--help",
+            "--version",
+        ] {
+            assert!(
+                message.contains(option),
+                "{option} is missing from:\n{message}"
+            );
+        }
     }
 
     #[test]
