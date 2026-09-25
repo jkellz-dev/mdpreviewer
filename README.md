@@ -11,6 +11,8 @@ Helix.
 ```sh
 mdpreview [--line N] [--no-open] path/to/file.md   # open a preview (or reuse one)
 mdpreview --sync [--line N] path/to/file.md        # update a running preview only
+mdpreview --restart [--line N] path/to/file.md     # stop any running server, then open
+mdpreview --quit                                   # stop the running server
 ```
 
 The first run binds a random local port, opens your default browser at that
@@ -27,10 +29,41 @@ the open tab switches to the new file. A new tab opens only if none is open.
   highlighting that block.
 - `--sync` only talks to a running server. It never starts one, never opens a
   tab and never prints anything, so it is cheap enough to run on every save.
-  It ignores files that aren't `.md` or `.markdown`.
+- Every mode that takes a file ignores anything that is not `.md` or
+  `.markdown`, so a preview binding is inert in a source buffer. A leading `~`
+  in the path is expanded.
+- `--quit` stops the running server and its browser tabs stop updating. It takes
+  no file, and exits 0 whether or not a server was running.
+- `--restart` is `--quit` followed by a normal open. Browser assets are compiled
+  into the binary, so after a rebuild this is how you get a running server to
+  serve the new ones.
 - `--no-open` prints the URL instead of opening a browser.
 
+### Zooming a diagram or image
+
+Click a mermaid diagram, an image, a table or a code block to blow it up to
+fill the window. In the overlay:
+
+| Input | Effect |
+| --- | --- |
+| scroll wheel | zoom in or out around the pointer |
+| drag | pan |
+| `0` | fit to the window again |
+| `+` / `-` | zoom from the centre |
+| double-click | toggle between fitting the window and the document's scale |
+| `f` | true browser fullscreen |
+| `esc`, the `×`, or a click outside | close |
+
+Links are left alone, so a linked image follows its link, and clicking after
+selecting text does not zoom. The overlay follows live reloads: saving the
+file re-renders what it is showing and keeps your zoom, and it closes if the
+block is gone.
+
 ### Helix
+
+Helix has no plugin system, so the preview is an ordinary command bound to a
+key. `:sh` runs in Helix's working directory and `%{buffer_name}` is relative to
+it (Helix has no absolute-path variable), so the two line up.
 
 ```toml
 [editor]
@@ -38,19 +71,48 @@ the open tab switches to the new file. A new tab opens only if none is open.
 auto-save = { focus-lost = true, after-delay.enable = true, after-delay.timeout = 300 }
 
 [keys.normal]
+# Save, then scroll a running preview to the cursor. A silent no-op otherwise.
 "C-s" = [":w", ':sh mdpreview --sync --line %{cursor_line} "%{buffer_name}"']
 
 [keys.insert]
 "C-s" = ["normal_mode", ":w", ':sh mdpreview --sync --line %{cursor_line} "%{buffer_name}"']
 
-[keys.normal."\\".m]
+# A "Markdown" submenu. This assumes `\` is your leader key; any free key works.
+[keys.normal.\\.m]
 label = "Markdown"
-m = { command = ':sh mdpreview --line %{cursor_line} "%{buffer_name}"', label = "Preview (start or switch)" }
-r = { command = ':sh mdpreview --sync --line %{cursor_line} "%{buffer_name}"', label = "Scroll preview to cursor" }
+m = { command = [":w", ':sh mdpreview --line %{cursor_line} "%{buffer_name}"'], label = "Preview (save, start or switch)" }
+r = { command = [":w", ':sh mdpreview --restart --line %{cursor_line} "%{buffer_name}"'], label = "Restart preview server" }
+q = { command = ":sh mdpreview --quit", label = "Quit preview server" }
 ```
 
-`%{buffer_name}` is relative to Helix's working directory, which is also where
-`:sh` runs. Helix has no absolute-path variable.
+| Key    | Does                                                                |
+| ------ | ------------------------------------------------------------------- |
+| `C-s`  | Save, then scroll the preview to the cursor. Runs on every save.      |
+| `\mm` | Save, then start the preview or point the running one at this file    |
+| `\mr` | Save, then restart the server and open this file                      |
+| `\mq` | Stop the server                                                       |
+
+Helix has no per-filetype keymaps, so these run in every buffer. `mdpreview`
+only acts on `.md` and `.markdown` files; anywhere else it refuses with
+`not a Markdown file: <name>`, which Helix shows in its shell popup. That also
+covers `[scratch]` buffers, where `:w` fails first but Helix runs the rest of
+the list anyway.
+
+Success is silent. `mdpreview` prints the URL only when stdout is a terminal,
+so a binding does not pop one up on every keypress, but failures always print.
+
+Helix reports a file outside its working directory as `~/...`, and the binding
+quotes it so the shell cannot expand it. `mdpreview` expands a leading `~`
+itself.
+
+Bindings like these need `mdpreview` on the `PATH` Helix inherits;
+`mise run install` symlinks it into `~/.local/bin`.
+
+Use `\mr` after rebuilding. The browser assets are compiled into the binary, so
+a server started from an older build keeps serving the assets it was built with,
+no matter how many times you press `\mm`. `--restart` replaces the process, so
+it picks up both new assets and new server code. It binds a new port, so any tab
+from the previous server stops updating; close it.
 
 ## Building and installing
 
@@ -90,6 +152,9 @@ Override versions via `MERMAID_VERSION` / `GH_MD_CSS_VERSION`.
 - `server.rs` serves the shell page, the rendered fragment (`/content`), an SSE
   stream of `reload` and `scroll` events (`/events`), and the embedded assets.
   It switches documents when asked over the control socket.
+- `assets/app.js` renders the fragment, turns mermaid fences into diagrams,
+  reloads on SSE events, scrolls to the cursor line, and provides the
+  click-to-zoom overlay.
 - `control.rs` is the control socket: its location, a one-line protocol, the
   client used by later runs, and the server-side listener.
 - `main.rs` parses the CLI, reuses a running server when there is one, and
