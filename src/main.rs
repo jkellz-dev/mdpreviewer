@@ -17,7 +17,6 @@ use std::io::IsTerminal;
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process;
-use std::sync::mpsc::channel;
 
 fn main() {
     let file = match parse_target() {
@@ -40,7 +39,7 @@ fn main() {
     if detach(&url) {
         // Parent process has handled the browser and exited; only the detached
         // child reaches here.
-        run_server(listener, file);
+        run_server(listener, file, url);
     }
 }
 
@@ -117,20 +116,8 @@ fn detach_child() {
     }
 }
 
-/// Wire the watcher to the server and serve until the process exits.
-fn run_server(listener: TcpListener, file: PathBuf) {
-    let (reload_tx, reload_rx) = channel::<server::Event>();
-
-    // Keep the watcher alive for the lifetime of the process by holding it until
-    // `serve` returns (which it does only at shutdown).
-    let _watcher = match watch::watch_file(&file, reload_tx) {
-        Ok(watcher) => Some(watcher),
-        Err(err) => {
-            eprintln!("mdpreview: file watch failed, live reload disabled: {err}");
-            None
-        }
-    };
-
+/// Start the HTTP server on `listener` and serve until the process exits.
+fn run_server(listener: TcpListener, file: PathBuf, url: String) {
     let server = match tiny_http::Server::from_listener(listener, None) {
         Ok(server) => server,
         Err(err) => {
@@ -138,6 +125,11 @@ fn run_server(listener: TcpListener, file: PathBuf) {
             process::exit(1);
         }
     };
-
-    server::serve(server, file, reload_rx);
+    let config = server::Config {
+        url,
+        idle_grace: Some(std::time::Duration::from_secs(15)),
+        #[cfg(unix)]
+        control: None,
+    };
+    server::serve(server, file, config);
 }
