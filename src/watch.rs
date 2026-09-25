@@ -84,3 +84,55 @@ fn event_touches(event: &notify::Result<notify::Event>, target: &Path) -> bool {
         .iter()
         .any(|p| p == target || p.canonicalize().map(|c| c == target).unwrap_or(false))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::sync::mpsc::{RecvTimeoutError, channel};
+
+    use super::*;
+    use crate::testutil::TestDir;
+
+    /// How long to wait for something we expect to arrive.
+    const EXPECT: Duration = Duration::from_secs(5);
+
+    /// Watching is tied to the returned watcher's lifetime, which is how the
+    /// server swaps documents without leaking the previous file's watch.
+    ///
+    /// The end of the watch is checked by waiting for the channel to close
+    /// rather than by waiting for a reload not to arrive. Dropping the watcher
+    /// closes the source the debounce thread reads from, so the thread returns
+    /// and its sender goes with it. That makes a stopped watch something the
+    /// test observes rather than infers from silence, so a watch that outlives
+    /// its watcher fails here instead of passing whenever the timing is kind.
+    #[test]
+    fn dropping_the_watcher_ends_the_watch() {
+        let dir = TestDir::new("watch-drop");
+        let file = dir.join("a.md");
+        fs::write(&file, "# A\n").unwrap();
+
+        let (events_tx, events_rx) = channel();
+        let watcher = watch_file(&file, events_tx).expect("watch the file");
+
+        // The watch is live: a write reaches the channel. A reload for the
+        // write above can arrive first, since macOS replays events from just
+        // before a stream is created, but either way the next thing on the
+        // channel is a reload.
+        fs::write(&file, "# A changed\n").unwrap();
+        assert_eq!(events_rx.recv_timeout(EXPECT), Ok(Event::Reload));
+
+        drop(watcher);
+        fs::write(&file, "# A changed again\n").unwrap();
+
+        // Reloads still in flight from the writes above are fine; what has to
+        // happen is that the stream ends.
+        loop {
+            match events_rx.recv_timeout(EXPECT) {
+                Ok(Event::Reload) => continue,
+                Err(RecvTimeoutError::Disconnected) => break,
+                Err(RecvTimeoutError::Timeout) => panic!("the watch outlived its watcher"),
+                Ok(other) => panic!("a file watch should only reload, but sent {other:?}"),
+            }
+        }
+    }
+}
