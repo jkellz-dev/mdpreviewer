@@ -350,12 +350,24 @@ function zoomBy(factor, x, y) {
   applyTransform();
 }
 
+// The element a click should blow up, or null. A mermaid block is matched by
+// its <pre> so that clicking the padding around the diagram works too, but it
+// resolves to the <svg>, which is what ZOOM_SELECTOR names and what scales
+// losslessly.
+function resolveZoomTarget(node) {
+  const mermaid = node.closest?.("pre.mermaid");
+  if (mermaid) return mermaid.querySelector("svg");
+  return node.closest?.(ZOOM_SELECTOR) ?? null;
+}
+
 content.addEventListener("click", (event) => {
   // Leave modified clicks, links and text selection alone.
   if (event.button !== 0 || event.defaultPrevented) return;
   if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
-  const target = event.target.closest?.(ZOOM_SELECTOR);
-  if (!target || target.closest("a")) return;
+  const target = resolveZoomTarget(event.target);
+  // Covers both a zoomable element inside a link and a link inside a
+  // zoomable table or code block.
+  if (!target || event.target.closest?.("a")) return;
   if (!(window.getSelection()?.isCollapsed ?? true)) return;
   openZoom(target);
 });
