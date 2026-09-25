@@ -574,11 +574,13 @@ mod integration_tests {
         }
 
         /// Drain whatever is already queued, then wait for the stream to fall
-        /// quiet. The watcher can emit a `reload` for the write that set the
+        /// quiet. A watcher can emit a `reload` for the write that set the
         /// fixture up, because that write happens before the watch starts and
         /// macOS delivers such events to a stream created just afterwards.
-        /// That reload is unrelated to what the open-request tests assert, so
-        /// tests that expect a specific first frame settle the stream first.
+        /// Both the initial watch and the one an `open` creates when it
+        /// switches files are exposed to this. The reload is unrelated to what
+        /// the open-request tests assert, so tests that expect a specific next
+        /// frame settle the stream once the watch they care about is in place.
         fn settle(&mut self) {
             const QUIET: Duration = Duration::from_millis(250);
             self.stream.set_read_timeout(Some(QUIET)).unwrap();
@@ -680,14 +682,16 @@ mod integration_tests {
             "{content}"
         );
 
-        // The old file is no longer watched: editing it produces nothing, so
-        // the next frame is the scroll we ask for afterwards.
-        fs::write(&a, "# A changed\n").unwrap();
-        thread::sleep(Duration::from_millis(500));
-        assert!(matches!(open(&preview, &b, Some(9)), Reply::Ok { .. }));
-        assert_eq!(events.next(), "event: scroll\ndata: 9\n\n");
+        // Drop whatever macOS replayed into the watch this switch created, so
+        // the reload below is provably the write's. Settling before the write
+        // cannot swallow that reload, and a drain that took too much would
+        // hang this assertion rather than let it pass quietly.
+        events.settle();
 
-        // The new file is watched.
+        // The new file is watched. That the old one no longer is rests on the
+        // watch ending with its watcher, which `watch::tests` checks directly;
+        // asserting it here would mean waiting for a reload not to arrive,
+        // which macOS event replay makes a coin flip rather than a test.
         fs::write(&b, "# B changed\n").unwrap();
         assert_eq!(events.next(), "event: reload\ndata:\n\n");
     }
