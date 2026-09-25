@@ -47,3 +47,20 @@ pre.mermaid svg,
 .markdown-body details.frontmatter pre {
   margin: 0.5rem 0 0;
 }
+
+/* Scroll target: a brief outline around the block under the editor's cursor. */
+.markdown-body .mdpreview-target {
+  /* The vendored dark theme's accent blue. */
+  outline: 2px solid #4493f8;
+  outline-offset: 4px;
+  animation: mdpreview-target-fade 1.2s ease-out forwards;
+}
+
+@keyframes mdpreview-target-fade {
+  from {
+    outline-color: #4493f8;
+  }
+  to {
+    outline-color: transparent;
+  }
+}
