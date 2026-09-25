@@ -6,12 +6,12 @@ description = "Build the release binary"
 run = "cargo build --release"
 
 [tasks.install]
-description = "Build and symlink mdpreview into ~/.local/bin"
+description = "Build and symlink mdpreviewer into ~/.local/bin"
 depends = ["build"]
 run = '''
 mkdir -p "$HOME/.local/bin"
-ln -sf "$MISE_PROJECT_ROOT/target/release/mdpreview" "$HOME/.local/bin/mdpreview"
-echo "Linked $HOME/.local/bin/mdpreview -> $MISE_PROJECT_ROOT/target/release/mdpreview"
+ln -sf "$MISE_PROJECT_ROOT/target/release/mdpreviewer" "$HOME/.local/bin/mdpreviewer"
+echo "Linked $HOME/.local/bin/mdpreviewer -> $MISE_PROJECT_ROOT/target/release/mdpreviewer"
 '''
 
 [tasks.update-vendor]

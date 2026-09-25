@@ -11,7 +11,7 @@ const SUN_PATH_LEN: usize = 104;
 
 /// The longest path a test builds inside its [`TestDir`]. `ensure_socket_dir`
 /// is tested with the socket in a subdirectory, which is the deepest case.
-const LONGEST_ENTRY: &str = "sub/mdpreview.sock";
+const LONGEST_ENTRY: &str = "sub/mdpreviewer.sock";
 
 /// A canonical base directory that leaves room for those socket paths.
 ///
@@ -52,7 +52,7 @@ impl TestDir {
     pub fn new(name: &str) -> Self {
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let child = format!("mdpreview-test-{}-{name}-{n}", std::process::id());
+        let child = format!("mdpreviewer-test-{}-{name}-{n}", std::process::id());
         let path = base_dir(&child).join(&child);
         let _ = fs::remove_dir_all(&path);
         fs::DirBuilder::new()

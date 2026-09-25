@@ -1,4 +1,4 @@
-//! Control channel: a per-user Unix socket through which a new `mdpreview`
+//! Control channel: a per-user Unix socket through which a new `mdpreviewer`
 //! invocation hands its file and cursor line to an already-running server, or
 //! asks it to exit.
 //!
@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
-const SOCKET_NAME: &str = "mdpreview.sock";
+const SOCKET_NAME: &str = "mdpreviewer.sock";
 
 /// How long the server waits on a connected client before giving up on it.
 const SERVER_TIMEOUT: Duration = Duration::from_secs(1);
@@ -136,12 +136,14 @@ pub fn parse_reply(line: &str) -> Result<Reply, ProtocolError> {
     }
 }
 
-/// Where the control socket lives: `$XDG_RUNTIME_DIR/mdpreview.sock` if that is
+/// Where the control socket lives: `$XDG_RUNTIME_DIR/mdpreviewer.sock` if that is
 /// set to an absolute path, else a private per-user directory under `temp_dir`.
 pub fn socket_path(xdg_runtime_dir: Option<&OsStr>, temp_dir: &Path, uid: u32) -> PathBuf {
     match xdg_runtime_dir.map(Path::new) {
         Some(dir) if dir.is_absolute() => dir.join(SOCKET_NAME),
-        _ => temp_dir.join(format!("mdpreview-{uid}")).join(SOCKET_NAME),
+        _ => temp_dir
+            .join(format!("mdpreviewer-{uid}"))
+            .join(SOCKET_NAME),
     }
 }
 
@@ -426,12 +428,12 @@ mod tests {
     #[test]
     fn socket_path_prefers_xdg_runtime_dir() {
         let path = socket_path(Some(OsStr::new("/run/user/1000")), Path::new("/tmp"), 1000);
-        assert_eq!(path, PathBuf::from("/run/user/1000/mdpreview.sock"));
+        assert_eq!(path, PathBuf::from("/run/user/1000/mdpreviewer.sock"));
     }
 
     #[test]
     fn socket_path_falls_back_to_private_temp_dir() {
-        let expected = PathBuf::from("/tmp/mdpreview-1000/mdpreview.sock");
+        let expected = PathBuf::from("/tmp/mdpreviewer-1000/mdpreviewer.sock");
         assert_eq!(socket_path(None, Path::new("/tmp"), 1000), expected);
         assert_eq!(
             socket_path(Some(OsStr::new("")), Path::new("/tmp"), 1000),

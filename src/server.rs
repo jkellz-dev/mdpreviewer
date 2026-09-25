@@ -5,7 +5,7 @@
 //! Routes:
 //!   GET /                       preview shell (HTML)
 //!   GET /content                rendered markdown fragment; the
-//!                               `X-Mdpreview-File` header carries the
+//!                               `X-Mdpreviewer-File` header carries the
 //!                               percent-encoded file name
 //!   GET /events                 Server-Sent Events: `reload` and `scroll`
 //!   GET /assets/app.css         page styling
@@ -231,7 +231,7 @@ fn start_watch(path: &Path, events_tx: &Sender<Event>) -> Option<RecommendedWatc
     match watch::watch_file(path, events_tx.clone()) {
         Ok(watcher) => Some(watcher),
         Err(err) => {
-            eprintln!("mdpreview: file watch failed, live reload disabled: {err}");
+            eprintln!("mdpreviewer: file watch failed, live reload disabled: {err}");
             None
         }
     }
@@ -326,7 +326,7 @@ fn handle(request: Request, state: &State) {
     }
 }
 
-/// Render the current document, with its file name in `X-Mdpreview-File` for
+/// Render the current document, with its file name in `X-Mdpreviewer-File` for
 /// the page title. Read errors are reported inline so the browser shows the
 /// problem rather than a blank page.
 fn serve_content(request: Request, state: &State) {
@@ -335,7 +335,7 @@ fn serve_content(request: Request, state: &State) {
     let body = match fs::read_to_string(&path) {
         Ok(markdown) => render::render_markdown(&markdown),
         Err(err) => format!(
-            "<h1>mdpreview</h1><p>Could not read <code>{}</code>: {}</p>",
+            "<h1>mdpreviewer</h1><p>Could not read <code>{}</code>: {}</p>",
             path.display(),
             err
         ),
@@ -346,11 +346,11 @@ fn serve_content(request: Request, state: &State) {
         .unwrap_or_default();
     let response = Response::from_data(body.into_bytes())
         .with_header(header("Content-Type", "text/html; charset=utf-8"))
-        .with_header(header("X-Mdpreview-File", &percent_encode(&name)));
+        .with_header(header("X-Mdpreviewer-File", &percent_encode(&name)));
     let _ = request.respond(response);
 }
 
-/// Percent-encode a file name for the ASCII-only `X-Mdpreview-File` header;
+/// Percent-encode a file name for the ASCII-only `X-Mdpreviewer-File` header;
 /// the client decodes it with `decodeURIComponent`.
 fn percent_encode(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
@@ -514,7 +514,7 @@ mod integration_tests {
     fn start(dir: &TestDir, file: &Path) -> Preview {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let http = listener.local_addr().unwrap();
-        let socket = dir.join("mdpreview.sock");
+        let socket = dir.join("mdpreviewer.sock");
         let config = Config {
             url: format!("http://{http}/"),
             idle_grace: None,
@@ -642,7 +642,7 @@ mod integration_tests {
         assert!(
             content
                 .to_ascii_lowercase()
-                .contains("x-mdpreview-file: b.md"),
+                .contains("x-mdpreviewer-file: b.md"),
             "{content}"
         );
         assert!(

@@ -1,4 +1,4 @@
-// mdpreview client: render the markdown fragment, turn fenced mermaid code
+// mdpreviewer client: render the markdown fragment, turn fenced mermaid code
 // blocks into diagrams, live-reload on Server-Sent Events, and scroll to the
 // editor's cursor line when the server asks.
 
@@ -82,12 +82,12 @@ function scrollToLine(line) {
     return;
   }
   el.scrollIntoView({ block: "center", behavior: "smooth" });
-  el.classList.remove("mdpreview-target");
+  el.classList.remove("mdpreviewer-target");
   void el.offsetWidth; // Force a reflow so a repeated highlight restarts.
-  el.classList.add("mdpreview-target");
+  el.classList.add("mdpreviewer-target");
   el.addEventListener(
     "animationend",
-    () => el.classList.remove("mdpreview-target"),
+    () => el.classList.remove("mdpreviewer-target"),
     { once: true },
   );
 }
@@ -123,12 +123,12 @@ async function loadContent() {
       response = await fetch("/content", { cache: "no-store" });
       html = await response.text();
     } catch (err) {
-      console.error("mdpreview: failed to fetch content", err);
+      console.error("mdpreviewer: failed to fetch content", err);
       return;
     }
 
-    const name = response.headers.get("X-Mdpreview-File");
-    if (name) document.title = `${decodeURIComponent(name)} — mdpreview`;
+    const name = response.headers.get("X-Mdpreviewer-File");
+    if (name) document.title = `${decodeURIComponent(name)} — mdpreviewer`;
 
     content.innerHTML = html;
     retargetExternalLinks();
@@ -138,7 +138,7 @@ async function loadContent() {
       try {
         await mermaid.run({ nodes: blocks });
       } catch (err) {
-        console.error("mdpreview: mermaid render failed", err);
+        console.error("mdpreviewer: mermaid render failed", err);
       }
     }
 
@@ -186,13 +186,13 @@ const MAX_FIT_ZOOM = 6;
 const PAN_SLOP_PX = 4;
 
 const overlay = document.createElement("div");
-overlay.className = "mdpreview-zoom";
+overlay.className = "mdpreviewer-zoom";
 overlay.hidden = true;
 overlay.innerHTML =
-  '<div class="markdown-body mdpreview-zoom-figure"></div>' +
-  '<button type="button" class="mdpreview-zoom-close" title="Close (esc)">\u00d7</button>' +
-  '<div class="mdpreview-zoom-hint">scroll: zoom \u00b7 drag: pan \u00b7 0: fit \u00b7 f: fullscreen \u00b7 esc: close</div>';
-const figure = overlay.querySelector(".mdpreview-zoom-figure");
+  '<div class="markdown-body mdpreviewer-zoom-figure"></div>' +
+  '<button type="button" class="mdpreviewer-zoom-close" title="Close (esc)">\u00d7</button>' +
+  '<div class="mdpreviewer-zoom-hint">scroll: zoom \u00b7 drag: pan \u00b7 0: fit \u00b7 f: fullscreen \u00b7 esc: close</div>';
+const figure = overlay.querySelector(".mdpreviewer-zoom-figure");
 document.body.append(overlay);
 
 // The open zoom: { key, scale, fit, tx, ty }, or null when closed. `key` is
@@ -346,7 +346,7 @@ content.addEventListener("click", (event) => {
   openZoom(target);
 });
 
-overlay.querySelector(".mdpreview-zoom-close")
+overlay.querySelector(".mdpreviewer-zoom-close")
   .addEventListener("click", closeZoom);
 
 overlay.addEventListener("wheel", (event) => {
@@ -363,7 +363,7 @@ overlay.addEventListener("wheel", (event) => {
 
 overlay.addEventListener("pointerdown", (event) => {
   if (!zoom || event.button !== 0) return;
-  if (event.target.closest(".mdpreview-zoom-close")) return;
+  if (event.target.closest(".mdpreviewer-zoom-close")) return;
   pan = {
     id: event.pointerId,
     x: event.clientX,

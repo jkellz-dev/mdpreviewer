@@ -1,4 +1,4 @@
-# mdpreview
+# mdpreviewer
 
 A small, self-contained CLI that serves a live-reloading browser preview of a
 Markdown file, including [mermaid](https://mermaid.js.org/) diagrams. Built to
@@ -9,10 +9,10 @@ Helix.
 ## Usage
 
 ```sh
-mdpreview [--line N] [--no-open] path/to/file.md   # open a preview (or reuse one)
-mdpreview --sync [--line N] path/to/file.md        # update a running preview only
-mdpreview --restart [--line N] path/to/file.md     # stop any running server, then open
-mdpreview --quit                                   # stop the running server
+mdpreviewer [--line N] [--no-open] path/to/file.md   # open a preview (or reuse one)
+mdpreviewer --sync [--line N] path/to/file.md        # update a running preview only
+mdpreviewer --restart [--line N] path/to/file.md     # stop any running server, then open
+mdpreviewer --quit                                   # stop the running server
 ```
 
 The first run binds a random local port, opens your default browser at that
@@ -22,7 +22,7 @@ command without blocking, and it shuts itself down shortly after the last
 browser tab closes.
 
 Only one preview server runs per user. Later runs hand their file to it over a
-Unix socket (`$XDG_RUNTIME_DIR/mdpreview.sock`) instead of starting another, so
+Unix socket (`$XDG_RUNTIME_DIR/mdpreviewer.sock`) instead of starting another, so
 the open tab switches to the new file. A new tab opens only if none is open.
 
 - `--line N` scrolls the preview to source line `N`, centering and briefly
@@ -72,17 +72,17 @@ auto-save = { focus-lost = true, after-delay.enable = true, after-delay.timeout 
 
 [keys.normal]
 # Save, then scroll a running preview to the cursor. A silent no-op otherwise.
-"C-s" = [":w", ':sh mdpreview --sync --line %{cursor_line} "%{buffer_name}"']
+"C-s" = [":w", ':sh mdpreviewer --sync --line %{cursor_line} "%{buffer_name}"']
 
 [keys.insert]
-"C-s" = ["normal_mode", ":w", ':sh mdpreview --sync --line %{cursor_line} "%{buffer_name}"']
+"C-s" = ["normal_mode", ":w", ':sh mdpreviewer --sync --line %{cursor_line} "%{buffer_name}"']
 
 # A "Markdown" submenu. This assumes `\` is your leader key; any free key works.
 [keys.normal.\\.m]
 label = "Markdown"
-m = { command = [":w", ':sh mdpreview --line %{cursor_line} "%{buffer_name}"'], label = "Preview (save, start or switch)" }
-r = { command = [":w", ':sh mdpreview --restart --line %{cursor_line} "%{buffer_name}"'], label = "Restart preview server" }
-q = { command = ":sh mdpreview --quit", label = "Quit preview server" }
+m = { command = [":w", ':sh mdpreviewer --line %{cursor_line} "%{buffer_name}"'], label = "Preview (save, start or switch)" }
+r = { command = [":w", ':sh mdpreviewer --restart --line %{cursor_line} "%{buffer_name}"'], label = "Restart preview server" }
+q = { command = ":sh mdpreviewer --quit", label = "Quit preview server" }
 ```
 
 | Key    | Does                                                                |
@@ -92,20 +92,20 @@ q = { command = ":sh mdpreview --quit", label = "Quit preview server" }
 | `\mr` | Save, then restart the server and open this file                      |
 | `\mq` | Stop the server                                                       |
 
-Helix has no per-filetype keymaps, so these run in every buffer. `mdpreview`
+Helix has no per-filetype keymaps, so these run in every buffer. `mdpreviewer`
 only acts on `.md` and `.markdown` files; anywhere else it refuses with
 `not a Markdown file: <name>`, which Helix shows in its shell popup. That also
 covers `[scratch]` buffers, where `:w` fails first but Helix runs the rest of
 the list anyway.
 
-Success is silent. `mdpreview` prints the URL only when stdout is a terminal,
+Success is silent. `mdpreviewer` prints the URL only when stdout is a terminal,
 so a binding does not pop one up on every keypress, but failures always print.
 
 Helix reports a file outside its working directory as `~/...`, and the binding
-quotes it so the shell cannot expand it. `mdpreview` expands a leading `~`
+quotes it so the shell cannot expand it. `mdpreviewer` expands a leading `~`
 itself.
 
-Bindings like these need `mdpreview` on the `PATH` Helix inherits;
+Bindings like these need `mdpreviewer` on the `PATH` Helix inherits;
 `mise run install` symlinks it into `~/.local/bin`.
 
 Use `\mr` after rebuilding. The browser assets are compiled into the binary, so
@@ -120,7 +120,7 @@ This repo uses [mise](https://mise.jdx.dev/) for tasks:
 
 ```sh
 mise run build          # cargo build --release
-mise run install        # build + symlink target/release/mdpreview into ~/.local/bin
+mise run install        # build + symlink target/release/mdpreviewer into ~/.local/bin
 mise run update-vendor  # refresh the vendored browser assets
 ```
 

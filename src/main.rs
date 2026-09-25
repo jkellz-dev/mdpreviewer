@@ -1,18 +1,18 @@
-//! mdpreview: a live-reloading browser preview for Markdown, with mermaid.
+//! mdpreviewer: a live-reloading browser preview for Markdown, with mermaid.
 //!
-//! Open mode, `mdpreview [--line N] [--no-open] <file>`: if a preview server is
+//! Open mode, `mdpreviewer [--line N] [--no-open] <file>`: if a preview server is
 //! already running for this user, tell it (over the control socket, see
 //! `control.rs`) to show the file and scroll to the line; otherwise start one.
 //! A new server binds a local port, the browser opens at that URL, and the
 //! page reloads on save. On Unix the server detaches from the launching
 //! process (for example Helix's `:sh`) so the caller returns immediately.
 //!
-//! Sync mode, `mdpreview --sync [--line N] <file>`: only tell a running server
+//! Sync mode, `mdpreviewer --sync [--line N] <file>`: only tell a running server
 //! to show the file and scroll. It never starts a server, opens a tab, or
 //! prints anything, so it is cheap enough to run on every save.
 //!
-//! Quit mode, `mdpreview --quit`: ask a running server to exit. Restart mode,
-//! `mdpreview --restart [--line N] <file>`: quit, wait for the socket, then
+//! Quit mode, `mdpreviewer --quit`: ask a running server to exit. Restart mode,
+//! `mdpreviewer --restart [--line N] <file>`: quit, wait for the socket, then
 //! open. Browser assets are compiled into the binary, so a restart is what
 //! makes a new build take effect.
 
@@ -30,10 +30,10 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::time::Duration;
 
-const USAGE: &str = "usage: mdpreview [--line N] [--no-open] <file.md>\n       \
-                     mdpreview --sync [--line N] <file.md>\n       \
-                     mdpreview --restart [--line N] [--no-open] <file.md>\n       \
-                     mdpreview --quit";
+const USAGE: &str = "usage: mdpreviewer [--line N] [--no-open] <file.md>\n       \
+                     mdpreviewer --sync [--line N] <file.md>\n       \
+                     mdpreviewer --restart [--line N] [--no-open] <file.md>\n       \
+                     mdpreviewer --quit";
 
 /// Exit the server this long after the last browser tab closes.
 const IDLE_GRACE: Duration = Duration::from_secs(15);
@@ -82,7 +82,7 @@ fn main() {
         // Sync mode runs on every save; it never complains.
         Err(_) if raw.iter().any(|arg| arg == "--sync") => process::exit(0),
         Err(msg) => {
-            eprintln!("mdpreview: {msg}\n{USAGE}");
+            eprintln!("mdpreviewer: {msg}\n{USAGE}");
             process::exit(2);
         }
     };
@@ -305,7 +305,7 @@ fn run_restart(args: &Args) {
 fn run_open(args: &Args) {
     let file = args.file.as_deref().unwrap_or_default();
     let file = expand_tilde(file).canonicalize().unwrap_or_else(|err| {
-        eprintln!("mdpreview: cannot open {file}: {err}");
+        eprintln!("mdpreviewer: cannot open {file}: {err}");
         process::exit(1);
     });
 
@@ -319,7 +319,7 @@ fn run_open(args: &Args) {
     let listener = match TcpListener::bind("127.0.0.1:0") {
         Ok(listener) => listener,
         Err(err) => {
-            eprintln!("mdpreview: cannot bind local port: {err}");
+            eprintln!("mdpreviewer: cannot bind local port: {err}");
             process::exit(1);
         }
     };
@@ -352,7 +352,7 @@ fn reuse_or_bind(file: &Path, args: &Args) -> Option<control::ControlSocket> {
     // could learn our paths and hand back a URL for us to open.
     if let Err(err) = control::ensure_socket_dir(&socket, control::current_uid()) {
         eprintln!(
-            "mdpreview: cannot use {} ({err}); running a standalone preview",
+            "mdpreviewer: cannot use {} ({err}); running a standalone preview",
             socket.display()
         );
         return None;
@@ -373,20 +373,20 @@ fn reuse_or_bind(file: &Path, args: &Args) -> Option<control::ControlSocket> {
         Ok(control::Reply::Bye) => {
             // Only a `quit` is answered with `bye`; a server that sends one
             // here is not speaking this protocol.
-            eprintln!("mdpreview: unexpected reply from the control socket");
+            eprintln!("mdpreviewer: unexpected reply from the control socket");
             process::exit(1);
         }
         Ok(control::Reply::Err(reason)) => {
-            eprintln!("mdpreview: {reason}");
+            eprintln!("mdpreviewer: {reason}");
             process::exit(1);
         }
         Err(control::SendError::NoServer) => {}
         Err(err @ control::SendError::Unusable(_)) => {
-            eprintln!("mdpreview: {err}; running a standalone preview");
+            eprintln!("mdpreviewer: {err}; running a standalone preview");
             return None;
         }
         Err(err) => {
-            eprintln!("mdpreview: {err}");
+            eprintln!("mdpreviewer: {err}");
             process::exit(1);
         }
     }
@@ -394,7 +394,7 @@ fn reuse_or_bind(file: &Path, args: &Args) -> Option<control::ControlSocket> {
         Ok(control) => Some(control),
         Err(err) => {
             eprintln!(
-                "mdpreview: cannot use {} ({err}); running a standalone preview",
+                "mdpreviewer: cannot use {} ({err}); running a standalone preview",
                 socket.display()
             );
             None
@@ -414,7 +414,7 @@ fn reuse_or_bind(file: &Path, args: &Args) -> Option<control::ControlSocket> {
 fn detach(url: &str, args: &Args) -> bool {
     match unsafe { libc::fork() } {
         -1 => {
-            eprintln!("mdpreview: fork failed");
+            eprintln!("mdpreviewer: fork failed");
             process::exit(1);
         }
         0 => {
@@ -449,18 +449,18 @@ fn announce(url: &str, args: &Args) {
 /// way to ask it to go; it has to be killed by PID.
 #[cfg(unix)]
 const REFUSED: &str =
-    "the running preview server is too old to quit; kill it by PID (ps | grep mdpreview)";
+    "the running preview server is too old to quit; kill it by PID (ps | grep mdpreviewer)";
 
 /// Report a failure and stop. Unlike [`report`] this is never suppressed: an
-/// editor that runs `mdpreview` from a keybinding shows what a command wrote,
+/// editor that runs `mdpreviewer` from a keybinding shows what a command wrote,
 /// and a refusal with no explanation looks like a broken binding.
 fn fail(message: &str) -> ! {
-    eprintln!("mdpreview: {message}");
+    eprintln!("mdpreviewer: {message}");
     process::exit(1);
 }
 
 /// Report success. Only when stdout is a real terminal: this is mostly the
-/// URL, and an editor that runs `mdpreview` from a keybinding captures output
+/// URL, and an editor that runs `mdpreviewer` from a keybinding captures output
 /// into a popup, which would then appear on every keypress. The work happens
 /// either way. Failures go through [`fail`] and are never suppressed.
 fn report(message: &str) {
@@ -491,7 +491,7 @@ fn run_server(listener: TcpListener, file: PathBuf, config: server::Config) {
     let server = match tiny_http::Server::from_listener(listener, None) {
         Ok(server) => server,
         Err(err) => {
-            eprintln!("mdpreview: cannot start server: {err}");
+            eprintln!("mdpreviewer: cannot start server: {err}");
             process::exit(1);
         }
     };

@@ -49,7 +49,7 @@ pre.mermaid svg,
  * The figure is centered by `left/top: 50%` plus a `translate(-50%, -50%)` in
  * the transform, so pan and zoom are a single matrix on one element.
  */
-.mdpreview-zoom {
+.mdpreviewer-zoom {
   position: fixed;
   inset: 0;
   z-index: 100;
@@ -61,20 +61,19 @@ pre.mermaid svg,
   overscroll-behavior: contain;
 }
 
-.mdpreview-zoom[hidden] {
+.mdpreviewer-zoom[hidden] {
   display: none;
 }
 
 /* While panning, text must not select: the drag is a pan, not a selection.
- * This lasts only for the drag, so double-click and triple-click selection
- * inside a zoomed code block still work. */
-.mdpreview-zoom.is-panning {
+ * The rule is scoped to the drag, so selection is untouched at rest. */
+.mdpreviewer-zoom.is-panning {
   cursor: grabbing;
   -webkit-user-select: none;
   user-select: none;
 }
 
-.mdpreview-zoom-figure {
+.mdpreviewer-zoom-figure {
   position: absolute;
   left: 50%;
   top: 50%;
@@ -84,15 +83,15 @@ pre.mermaid svg,
 
 /* The figure carries .markdown-body so cloned tables and code keep their
  * theme, but none of the page layout that class normally applies. */
-.mdpreview-zoom .markdown-body {
+.mdpreviewer-zoom .markdown-body {
   max-width: none;
   margin: 0;
   padding: 0;
   background: transparent;
 }
 
-.mdpreview-zoom-hint,
-.mdpreview-zoom-close {
+.mdpreviewer-zoom-hint,
+.mdpreviewer-zoom-close {
   position: absolute;
   color: #9198a1;
   background: rgba(13, 17, 23, 0.85);
@@ -102,7 +101,7 @@ pre.mermaid svg,
   font-size: 12px;
 }
 
-.mdpreview-zoom-hint {
+.mdpreviewer-zoom-hint {
   left: 50%;
   bottom: 1rem;
   transform: translateX(-50%);
@@ -111,7 +110,7 @@ pre.mermaid svg,
   white-space: nowrap;
 }
 
-.mdpreview-zoom-close {
+.mdpreviewer-zoom-close {
   top: 1rem;
   right: 1rem;
   width: 2rem;
@@ -122,7 +121,7 @@ pre.mermaid svg,
   cursor: pointer;
 }
 
-.mdpreview-zoom-close:hover {
+.mdpreviewer-zoom-close:hover {
   color: #f0f6fc;
 }
 
@@ -143,14 +142,14 @@ pre.mermaid svg,
 }
 
 /* Scroll target: a brief outline around the block under the editor's cursor. */
-.markdown-body .mdpreview-target {
+.markdown-body .mdpreviewer-target {
   /* The vendored dark theme's accent blue. */
   outline: 2px solid #4493f8;
   outline-offset: 4px;
-  animation: mdpreview-target-fade 1.2s ease-out forwards;
+  animation: mdpreviewer-target-fade 1.2s ease-out forwards;
 }
 
-@keyframes mdpreview-target-fade {
+@keyframes mdpreviewer-target-fade {
   from {
     outline-color: #4493f8;
   }
