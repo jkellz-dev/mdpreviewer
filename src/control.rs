@@ -11,9 +11,21 @@
 
 use std::ffi::OsStr;
 use std::fmt;
+use std::fs;
+use std::io::{self, BufRead, BufReader, Read, Write};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::Duration;
 
 const SOCKET_NAME: &str = "mdpreview.sock";
+
+/// How long the server waits on a connected client before giving up on it.
+const SERVER_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// Upper bound on a request line: a maximal path plus the framing.
+const MAX_REQUEST: u64 = 8 * 1024;
 
 /// Show `path` and, if given, scroll to 1-based source `line`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,9 +139,155 @@ pub fn current_uid() -> u32 {
     unsafe { libc::getuid() }
 }
 
+/// A bound control socket, plus what is needed to remove it safely on exit.
+pub struct ControlSocket {
+    pub listener: UnixListener,
+    pub path: PathBuf,
+    /// Inode of the socket file at bind time; see [`remove_socket_if_ours`].
+    pub inode: u64,
+}
+
+#[derive(Debug)]
+pub enum SendError {
+    /// No socket file, or nothing listening on it (a stale socket).
+    NoServer,
+    /// A server accepted the connection but did not answer in time.
+    Timeout,
+    Protocol(ProtocolError),
+    Io(io::Error),
+}
+
+impl fmt::Display for SendError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SendError::NoServer => f.write_str("no preview server is running"),
+            SendError::Timeout => f.write_str("the preview server did not respond"),
+            SendError::Protocol(err) => write!(f, "control protocol error: {err}"),
+            SendError::Io(err) => write!(f, "control socket error: {err}"),
+        }
+    }
+}
+
+/// Make sure the socket's directory exists and only `uid` can use it, so no
+/// other user can plant or intercept the socket. A missing directory is
+/// created with mode 0700; an existing one must be a real directory (not a
+/// symlink) owned by `uid` with no group or other permissions.
+pub fn ensure_socket_dir(socket: &Path, uid: u32) -> io::Result<()> {
+    let dir = socket
+        .parent()
+        .ok_or_else(|| io::Error::other("socket path has no parent directory"))?;
+    match fs::DirBuilder::new().mode(0o700).create(dir) {
+        Ok(()) => return Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(err) => return Err(err),
+    }
+    let meta = fs::symlink_metadata(dir)?;
+    let problem = if !meta.is_dir() {
+        "is not a directory"
+    } else if meta.uid() != uid {
+        "is owned by another user"
+    } else if meta.mode() & 0o077 != 0 {
+        "is accessible to other users"
+    } else {
+        return Ok(());
+    };
+    Err(io::Error::other(format!("{} {problem}", dir.display())))
+}
+
+/// Bind the control socket at `path`, replacing any stale socket file a dead
+/// server left behind. Call this only after [`send_open`] found no live server.
+pub fn bind(path: &Path) -> io::Result<ControlSocket> {
+    ensure_socket_dir(path, current_uid())?;
+    match fs::remove_file(path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err),
+    }
+    let listener = UnixListener::bind(path)?;
+    let inode = fs::symlink_metadata(path)?.ino();
+    Ok(ControlSocket {
+        listener,
+        path: path.to_owned(),
+        inode,
+    })
+}
+
+/// Send one `open` request to the server listening on `socket` and wait up to
+/// `timeout` (per read or write) for its reply.
+pub fn send_open(socket: &Path, request: &Request, timeout: Duration) -> Result<Reply, SendError> {
+    let message = format_request(request).map_err(SendError::Protocol)?;
+    let stream = UnixStream::connect(socket).map_err(|err| match err.kind() {
+        io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused => SendError::NoServer,
+        _ => SendError::Io(err),
+    })?;
+    stream
+        .set_read_timeout(Some(timeout))
+        .map_err(SendError::Io)?;
+    stream
+        .set_write_timeout(Some(timeout))
+        .map_err(SendError::Io)?;
+    (&stream)
+        .write_all(message.as_bytes())
+        .map_err(timeout_or_io)?;
+    let mut reply = String::new();
+    BufReader::new(&stream)
+        .read_line(&mut reply)
+        .map_err(timeout_or_io)?;
+    parse_reply(&reply).map_err(SendError::Protocol)
+}
+
+fn timeout_or_io(err: io::Error) -> SendError {
+    match err.kind() {
+        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => SendError::Timeout,
+        _ => SendError::Io(err),
+    }
+}
+
+/// Answer requests on `listener` with `handle`, one connection at a time on a
+/// background thread. Each request is only a mutex update and a channel send,
+/// so there is nothing to gain from concurrency; the per-connection timeout
+/// keeps one silent client from blocking the next.
+pub fn spawn_listener<F>(listener: UnixListener, handle: F)
+where
+    F: Fn(Request) -> Reply + Send + 'static,
+{
+    thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let _ = serve_connection(&stream, &handle);
+        }
+    });
+}
+
+fn serve_connection(stream: &UnixStream, handle: &impl Fn(Request) -> Reply) -> io::Result<()> {
+    stream.set_read_timeout(Some(SERVER_TIMEOUT))?;
+    stream.set_write_timeout(Some(SERVER_TIMEOUT))?;
+    let mut line = String::new();
+    BufReader::new(stream.take(MAX_REQUEST)).read_line(&mut line)?;
+    let reply = match parse_request(&line) {
+        Ok(request) => handle(request),
+        Err(err) => Reply::Err(format!("bad request: {err}")),
+    };
+    let mut writer = stream;
+    writer.write_all(format_reply(&reply).as_bytes())
+}
+
+/// Remove the socket at `path` if it is still the one bound with `inode`. If a
+/// racing server has since replaced it, leave that server's socket alone.
+pub fn remove_socket_if_ours(path: &Path, inode: u64) {
+    if fs::symlink_metadata(path).is_ok_and(|meta| meta.ino() == inode) {
+        let _ = fs::remove_file(path);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::Instant;
+
+    use crate::testutil::TestDir;
+
+    const WAIT: Duration = Duration::from_secs(3);
 
     fn request(path: &str, line: Option<u32>) -> Request {
         Request {
@@ -226,5 +384,151 @@ mod tests {
             socket_path(Some(OsStr::new("run/user")), Path::new("/tmp"), 1000),
             expected
         );
+    }
+
+    #[test]
+    fn ensure_socket_dir_creates_a_private_dir() {
+        let dir = TestDir::new("ensure-create");
+        let socket = dir.join("sub").join(SOCKET_NAME);
+        ensure_socket_dir(&socket, current_uid()).unwrap();
+        let mode = fs::metadata(dir.join("sub")).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
+    }
+
+    #[test]
+    fn ensure_socket_dir_accepts_an_existing_private_dir() {
+        let dir = TestDir::new("ensure-ok");
+        ensure_socket_dir(&dir.join(SOCKET_NAME), current_uid()).unwrap();
+    }
+
+    #[test]
+    fn ensure_socket_dir_rejects_shared_or_foreign_dirs() {
+        let dir = TestDir::new("ensure-reject");
+
+        let shared = dir.join("shared");
+        fs::DirBuilder::new().mode(0o755).create(&shared).unwrap();
+        fs::set_permissions(&shared, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(ensure_socket_dir(&shared.join(SOCKET_NAME), current_uid()).is_err());
+
+        let link = dir.join("link");
+        std::os::unix::fs::symlink(dir.path(), &link).unwrap();
+        assert!(ensure_socket_dir(&link.join(SOCKET_NAME), current_uid()).is_err());
+
+        // Owned by someone else, as far as the check can tell.
+        assert!(ensure_socket_dir(&dir.join(SOCKET_NAME), current_uid() + 1).is_err());
+    }
+
+    #[test]
+    fn send_open_round_trips_through_the_listener() {
+        let dir = TestDir::new("round-trip");
+        let socket = dir.join(SOCKET_NAME);
+        let control = bind(&socket).unwrap();
+        spawn_listener(control.listener, |request| Reply::Ok {
+            url: request.path.display().to_string(),
+            clients: request.line.unwrap_or(0) as usize,
+        });
+
+        let reply = send_open(&socket, &request("/x/a b.md", Some(4)), WAIT).unwrap();
+        assert_eq!(
+            reply,
+            Reply::Ok {
+                url: "/x/a b.md".into(),
+                clients: 4
+            }
+        );
+    }
+
+    #[test]
+    fn send_open_reports_no_server_without_a_socket() {
+        let dir = TestDir::new("no-socket");
+        let result = send_open(&dir.join(SOCKET_NAME), &request("/x.md", None), WAIT);
+        assert!(matches!(result, Err(SendError::NoServer)), "{result:?}");
+    }
+
+    #[test]
+    fn stale_sockets_report_no_server_and_are_replaced_by_bind() {
+        let dir = TestDir::new("stale");
+        let socket = dir.join(SOCKET_NAME);
+        drop(bind(&socket).unwrap()); // The file stays behind, like after a crash.
+        assert!(socket.exists());
+
+        let result = send_open(&socket, &request("/x.md", None), WAIT);
+        assert!(matches!(result, Err(SendError::NoServer)), "{result:?}");
+        bind(&socket).expect("bind replaces the stale socket");
+    }
+
+    #[test]
+    fn send_open_times_out_on_a_silent_server() {
+        let dir = TestDir::new("silent-server");
+        let socket = dir.join(SOCKET_NAME);
+        // Never accepted: the connection sits in the backlog, unanswered.
+        let _listener = UnixListener::bind(&socket).unwrap();
+
+        let started = Instant::now();
+        let result = send_open(&socket, &request("/x.md", None), Duration::from_millis(200));
+        assert!(matches!(result, Err(SendError::Timeout)), "{result:?}");
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn a_silent_client_does_not_wedge_the_listener() {
+        let dir = TestDir::new("silent-client");
+        let socket = dir.join(SOCKET_NAME);
+        let control = bind(&socket).unwrap();
+        spawn_listener(control.listener, |_| Reply::Ok {
+            url: "u".into(),
+            clients: 0,
+        });
+
+        // Connects and never sends anything.
+        let _idle = UnixStream::connect(&socket).unwrap();
+        thread::sleep(Duration::from_millis(50));
+
+        let started = Instant::now();
+        let reply = send_open(&socket, &request("/x.md", None), WAIT).unwrap();
+        assert_eq!(
+            reply,
+            Reply::Ok {
+                url: "u".into(),
+                clients: 0
+            }
+        );
+        // The listener gives up on the idle client after its 1 s timeout.
+        assert!(started.elapsed() < Duration::from_millis(2500));
+    }
+
+    #[test]
+    fn malformed_requests_get_an_error_reply() {
+        let dir = TestDir::new("malformed");
+        let socket = dir.join(SOCKET_NAME);
+        let control = bind(&socket).unwrap();
+        spawn_listener(control.listener, |_| unreachable!("handler must not run"));
+
+        let mut stream = UnixStream::connect(&socket).unwrap();
+        stream.set_read_timeout(Some(WAIT)).unwrap();
+        stream.write_all(b"hello\n").unwrap();
+        let mut reply = String::new();
+        BufReader::new(stream).read_line(&mut reply).unwrap();
+        assert!(reply.starts_with("err\tbad request"), "{reply:?}");
+    }
+
+    #[test]
+    fn remove_socket_if_ours_spares_a_replacement() {
+        let dir = TestDir::new("cleanup");
+        let socket = dir.join(SOCKET_NAME);
+        let ours = bind(&socket).unwrap();
+
+        // Another server took over the path: a different file (and inode) now
+        // sits there. Creating it while ours still exists guarantees a new inode.
+        let theirs = dir.join("theirs");
+        fs::write(&theirs, "").unwrap();
+        let their_inode = fs::metadata(&theirs).unwrap().ino();
+        fs::rename(&theirs, &socket).unwrap();
+
+        remove_socket_if_ours(&socket, ours.inode);
+        assert!(socket.exists(), "removed another server's socket");
+
+        remove_socket_if_ours(&socket, their_inode);
+        assert!(!socket.exists());
     }
 }

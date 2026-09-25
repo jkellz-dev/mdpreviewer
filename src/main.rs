@@ -9,6 +9,8 @@
 mod control;
 mod render;
 mod server;
+#[cfg(all(test, unix))]
+mod testutil;
 mod watch;
 
 use std::io::IsTerminal;
