@@ -1,6 +1,6 @@
 [package]
 name = "mdpreviewer"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 # The floor is set by the bon and darling dependencies, which require 1.88.
 # Verified with `cargo +1.88 check --all-targets --locked`.
