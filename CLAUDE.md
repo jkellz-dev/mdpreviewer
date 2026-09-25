@@ -67,6 +67,4 @@ On `scroll` events and `#line=N`, `findBlock` picks the innermost block-level el
 
 **Assets are embedded at compile time** (`include_str!` / `include_bytes!` in `server.rs`). Adding a new asset requires both a `const` and a route in `handle()`. A running server therefore keeps serving the assets it was built with, and later `mdpreviewer` runs hand their file to it over the control socket rather than starting a new one, so after changing anything under `assets/` the old server has to be killed (`lsof -a -p <pid> -iTCP -sTCP:LISTEN`, or `ss -xlpn | grep mdpreviewer.sock` on Linux) before the change shows up. `assets/vendor/` holds pinned third-party files (mermaid 11.17.2, github-markdown-css dark 5.8.1). Update them with the script rather than editing by hand.
 
-## Version control
-
-The repo is a colocated Jujutsu (`.jj`) + git repo. Git will usually show a detached `HEAD`, which is normal.
+@CLAUDE.local.md
