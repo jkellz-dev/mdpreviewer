@@ -6,6 +6,30 @@ replace an editor plugin (for example nvim's markdown-preview) with an external
 process, so it works with any editor that can run a shell command, such as
 Helix.
 
+## Installation
+
+With [cargo-binstall](https://github.com/cargo-bins/cargo-binstall), which
+fetches the prebuilt binary for your platform instead of compiling:
+
+```sh
+cargo binstall mdpreviewer
+```
+
+Or build and install from [crates.io](https://crates.io/crates/mdpreviewer):
+
+```sh
+cargo install mdpreviewer
+```
+
+Binaries are published for macOS arm64 (`aarch64-apple-darwin`) and Linux x86_64
+(`x86_64-unknown-linux-gnu`); `cargo install` covers everything else. The
+archives are also on the
+[releases page](https://github.com/jkellz-dev/mdpreviewer/releases) with a
+`.sha256` beside each one, if you would rather unpack one yourself.
+
+Either way, `mdpreviewer` has to land on the `PATH` your editor inherits. See
+[Building from source](#building-from-source) to install from a clone instead.
+
 ## Usage
 
 ```sh
@@ -119,18 +143,9 @@ no matter how many times you press `\mm`. `--restart` replaces the process, so
 it picks up both new assets and new server code. It binds a new port, so any tab
 from the previous server stops updating; close it.
 
-## Building and installing
+## Building from source
 
-Install the published binary with cargo:
-
-```sh
-cargo install mdpreviewer
-```
-
-Prebuilt macOS and Linux binaries are attached to each
-[release](https://github.com/jkellz-dev/mdpreviewer/releases).
-
-To build from a clone, this repo uses [mise](https://mise.jdx.dev/) for tasks:
+This repo uses [mise](https://mise.jdx.dev/) for tasks:
 
 ```sh
 mise run build          # cargo build --release
