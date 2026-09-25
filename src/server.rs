@@ -102,16 +102,20 @@ fn handle(request: Request, state: &State) {
     let path = request.url().split('?').next().unwrap_or("/");
     match path {
         "/" => respond(request, SHELL_HTML.as_bytes(), "text/html; charset=utf-8"),
-        "/content" => respond(request, render_content(state).as_bytes(), "text/html; charset=utf-8"),
+        "/content" => respond(
+            request,
+            render_content(state).as_bytes(),
+            "text/html; charset=utf-8",
+        ),
         "/events" => serve_events(request, state),
         "/assets/app.css" => respond(request, APP_CSS.as_bytes(), "text/css; charset=utf-8"),
         "/assets/app.js" => respond(request, APP_JS.as_bytes(), "text/javascript; charset=utf-8"),
-        "/assets/github-markdown.css" => {
-            respond(request, GITHUB_MARKDOWN_CSS.as_bytes(), "text/css; charset=utf-8")
-        }
-        "/assets/mermaid.min.js" => {
-            respond(request, MERMAID_JS, "text/javascript; charset=utf-8")
-        }
+        "/assets/github-markdown.css" => respond(
+            request,
+            GITHUB_MARKDOWN_CSS.as_bytes(),
+            "text/css; charset=utf-8",
+        ),
+        "/assets/mermaid.min.js" => respond(request, MERMAID_JS, "text/javascript; charset=utf-8"),
         _ => {
             let response = Response::from_data(&b"not found"[..]).with_status_code(404);
             let _ = request.respond(response);

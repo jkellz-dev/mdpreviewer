@@ -5,6 +5,8 @@
 //! detaches from the launching process (for example Helix's `:sh`) so the
 //! caller returns immediately while the server keeps running.
 
+#[cfg(unix)]
+mod control;
 mod render;
 mod server;
 mod watch;

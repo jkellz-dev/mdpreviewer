@@ -77,7 +77,8 @@ fn event_touches(event: &notify::Result<notify::Event>, target: &Path) -> bool {
     if matches!(event.kind, EventKind::Access(_)) {
         return false;
     }
-    event.paths.iter().any(|p| {
-        p == target || p.canonicalize().map(|c| c == target).unwrap_or(false)
-    })
+    event
+        .paths
+        .iter()
+        .any(|p| p == target || p.canonicalize().map(|c| c == target).unwrap_or(false))
 }
