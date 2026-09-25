@@ -12,7 +12,7 @@ nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
 
 ## Inline Formatting
 
-Duis aute irure dolor in **reprehenderit** in *voluptate* velit esse cillum
+Duis aute irure dolor in **reprehenderit** in _voluptate_ velit esse cillum
 dolore eu fugiat nulla pariatur. Excepteur sint ~~occaecat~~ cupidatat non
 proident, sunt in `culpa qui officia` deserunt mollit anim id est laborum.
 Autolink: https://example.com and a [named link](https://example.com/lorem).
@@ -38,11 +38,12 @@ Press <kbd>Ctrl</kbd> + <kbd>C</kbd> to consectetur adipiscing.[^1]
 - [ ] Consectetur adipiscing pending
 
 stuff
+
 ## Table
 
-| Lorem   | Ipsum   | Dolor |
+| Lorem   |  Ipsum  | Dolor |
 | :------ | :-----: | ----: |
-| Sit     | Amet    |    42 |
+| Sit     |  Amet   |    42 |
 | Consect | Adipisc |  1.50 |
 | Sed     | Eiusmod |   999 |
 
@@ -63,7 +64,7 @@ echo "lorem ipsum" | tr a-z A-Z
 > Neque porro quisquam est, qui dolorem ipsum quia dolor sit amet,
 > consectetur, adipisci velit.
 >
-> — Cicero, *De finibus bonorum et malorum*
+> — Cicero, _De finibus bonorum et malorum_
 
 ---
 

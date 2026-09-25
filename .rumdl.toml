@@ -1,0 +1,11 @@
+# MD013 (80 character lines) fights the prose style used here, where
+# paragraphs are one line per sentence and tables are wide.
+[global]
+disable = ["MD013"]
+exclude = [
+    # Test fixtures: front matter escaping edge cases and a deliberately
+    # invalid mermaid block.
+    "examples",
+    # Historical plan and spec records, kept as they were written.
+    "docs/superpowers",
+]

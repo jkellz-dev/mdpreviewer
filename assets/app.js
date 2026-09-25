@@ -21,9 +21,26 @@ const PENDING_SCROLL_MS = 1500;
 // Elements that make good scroll targets. comrak also puts data-sourcepos on
 // inline elements (em, code, a, ...); those are ignored.
 const BLOCK_SELECTOR = [
-  "h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "pre", "blockquote",
-  "table", "tr", "hr", "details", "ul", "ol", "section",
-].map((tag) => `${tag}[data-sourcepos]`).join(",");
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "p",
+  "li",
+  "pre",
+  "blockquote",
+  "table",
+  "tr",
+  "hr",
+  "details",
+  "ul",
+  "ol",
+  "section",
+]
+  .map((tag) => `${tag}[data-sourcepos]`)
+  .join(",");
 
 // The latest scroll request from the editor: { line, at }.
 let pendingScroll = null;
@@ -85,11 +102,9 @@ function scrollToLine(line) {
   el.classList.remove("mdpreviewer-target");
   void el.offsetWidth; // Force a reflow so a repeated highlight restarts.
   el.classList.add("mdpreviewer-target");
-  el.addEventListener(
-    "animationend",
-    () => el.classList.remove("mdpreviewer-target"),
-    { once: true },
-  );
+  el.addEventListener("animationend", () => el.classList.remove("mdpreviewer-target"), {
+    once: true,
+  });
 }
 
 function requestScroll(line) {
@@ -229,10 +244,7 @@ function contentSize(el) {
 // The scale at which `width` x `height` fills the window, with a small margin.
 function fitScale(width, height) {
   if (!(width > 0) || !(height > 0)) return 1;
-  const scale = Math.min(
-    (window.innerWidth * 0.96) / width,
-    (window.innerHeight * 0.96) / height,
-  );
+  const scale = Math.min((window.innerWidth * 0.96) / width, (window.innerHeight * 0.96) / height);
   return clamp(scale, MIN_ZOOM, MAX_FIT_ZOOM);
 }
 
@@ -242,7 +254,9 @@ function showClone(el) {
   const clone = el.cloneNode(true);
   // A native image drag would fire pointercancel and abort a pan.
   if (clone instanceof HTMLImageElement) clone.draggable = false;
-  clone.querySelectorAll?.("img").forEach((img) => { img.draggable = false; });
+  clone.querySelectorAll?.("img").forEach((img) => {
+    img.draggable = false;
+  });
   // The page styles shrink diagrams and images to the column; undo that.
   clone.style.maxWidth = "none";
   clone.style.maxHeight = "none";
@@ -261,8 +275,7 @@ function showClone(el) {
 function applyTransform() {
   if (!zoom) return;
   figure.style.transform =
-    `translate(-50%, -50%) translate(${zoom.tx}px, ${zoom.ty}px) ` +
-    `scale(${zoom.scale})`;
+    `translate(-50%, -50%) translate(${zoom.tx}px, ${zoom.ty}px) ` + `scale(${zoom.scale})`;
 }
 
 function openZoom(el) {
@@ -300,8 +313,9 @@ function closeZoom() {
 function refreshZoom() {
   if (!zoom) return;
   const el = zoom.key
-    ? [...content.querySelectorAll(ZOOM_SELECTOR)]
-      .find((candidate) => zoomKey(candidate) === zoom.key)
+    ? [...content.querySelectorAll(ZOOM_SELECTOR)].find(
+        (candidate) => zoomKey(candidate) === zoom.key,
+      )
     : null;
   if (!el) {
     closeZoom();
@@ -346,20 +360,19 @@ content.addEventListener("click", (event) => {
   openZoom(target);
 });
 
-overlay.querySelector(".mdpreviewer-zoom-close")
-  .addEventListener("click", closeZoom);
+overlay.querySelector(".mdpreviewer-zoom-close").addEventListener("click", closeZoom);
 
-overlay.addEventListener("wheel", (event) => {
-  if (!zoom) return;
-  event.preventDefault();
-  // deltaMode 1 is lines, 2 is pages; normalise both to roughly pixels.
-  const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 400 : 1;
-  zoomBy(
-    Math.exp(-event.deltaY * unit * 0.0015),
-    event.clientX,
-    event.clientY,
-  );
-}, { passive: false });
+overlay.addEventListener(
+  "wheel",
+  (event) => {
+    if (!zoom) return;
+    event.preventDefault();
+    // deltaMode 1 is lines, 2 is pages; normalise both to roughly pixels.
+    const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 400 : 1;
+    zoomBy(Math.exp(-event.deltaY * unit * 0.0015), event.clientX, event.clientY);
+  },
+  { passive: false },
+);
 
 overlay.addEventListener("pointerdown", (event) => {
   if (!zoom || event.button !== 0) return;

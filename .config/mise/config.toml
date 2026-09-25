@@ -1,6 +1,13 @@
 [tools]
 rust = "latest"
+actionlint = "latest"
 release-plz = "latest"
+hk = "2.1.0"
+zizmor = "latest"
+taplo = "latest"
+oxfmt = "latest"
+yamlfmt = "latest"
+rumdl = "latest"
 
 [tasks.build]
 description = "Build the release binary"
@@ -19,12 +26,19 @@ echo "Linked $HOME/.local/bin/mdpreviewer -> $MISE_PROJECT_ROOT/target/release/m
 description = "Re-download vendored mermaid + github-markdown assets"
 run = "sh scripts/update-vendor.sh"
 
+[tasks.lint]
+description = "Run every linter and formatter check (hk)"
+run = "hk check --all"
+
+[tasks.fix]
+description = "Apply every available lint and format fix (hk)"
+run = "hk fix --all"
+
 [tasks."release:check"]
 description = "Everything the release workflow checks, before pushing"
+depends = ["lint"]
 run = '''
 set -e
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
 cargo test --all-targets
 # --allow-dirty because in this colocated jj repo the git worktree only
 # catches up with the working copy when a jj command snapshots it.

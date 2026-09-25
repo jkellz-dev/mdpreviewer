@@ -1,0 +1,21 @@
+version: 2
+updates:
+  # Actions are pinned to commit SHAs, so without this they never move.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # Wait out a freshly published release before adopting it, the same idea
+    # as mise's minimum_release_age.
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: ci
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: build

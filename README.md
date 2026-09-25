@@ -139,6 +139,25 @@ Or with cargo directly:
 cargo build --release
 ```
 
+## Linting and formatting
+
+[hk](https://hk.jdx.dev/) drives every linter and formatter, so CI and a local
+run do the same work:
+
+```sh
+mise run lint  # hk check --all
+mise run fix   # hk fix --all
+```
+
+`hk.pkl` lists the steps: rustfmt and clippy for Rust, oxfmt for the browser
+JavaScript, yamlfmt and actionlint and zizmor for the workflows, taplo for TOML,
+and rumdl for Markdown. `examples/` is excluded from Markdown formatting because
+those files are fixtures whose odd formatting is the point, and
+`assets/vendor/` is excluded everywhere because it is pinned upstream code.
+
+hk can install git hooks with `hk install`, but this repo is developed with
+Jujutsu, which does not run git hooks, so run the tasks directly.
+
 ## Releasing
 
 [release-plz](https://release-plz.dev/) runs on every push to `main`. It keeps a

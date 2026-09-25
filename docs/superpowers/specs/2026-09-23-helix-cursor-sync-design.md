@@ -11,7 +11,7 @@ When editing Markdown in Helix, the browser preview should follow the editor:
    scrolls the preview so the block under Helix's cursor sits in the middle of
    the viewport, briefly highlighted.
 2. **One server, one tab.** A running mdpreview server is reused. Opening the
-   preview or saving a *different* Markdown file switches the existing tab to
+   preview or saving a _different_ Markdown file switches the existing tab to
    that file instead of starting a second server and tab.
 
 ### Constraints (from the Helix Use Case)
@@ -77,7 +77,7 @@ mode. In sync mode, every error exits 0 silently.
    - **Timeout (server hung):** print to stderr and exit 1.
 3. Start a server, as today but with a socket:
    - Bind the HTTP listener on `127.0.0.1:0` **and** the `UnixListener` at the
-     socket path *before* forking, so both are ready before the child's loops
+     socket path _before_ forking, so both are ready before the child's loops
      start.
    - Record the socket's inode right after binding.
    - Fork. The parent opens `<url>#line=N` (unless `--no-open`), reports the
@@ -120,8 +120,8 @@ is a pure function so tests don't have to change the environment:
 `ensure_socket_dir` creates the socket's directory with mode `0700` if it is
 missing. If it already exists, it checks that the directory is a real directory
 (not a symlink), is owned by `uid`, and has no group or other permission bits.
-This applies to `$XDG_RUNTIME_DIR` too. Both modes run the check *before
-connecting*, not only before binding. Otherwise a socket planted by another
+This applies to `$XDG_RUNTIME_DIR` too. Both modes run the check _before
+connecting_, not only before binding. Otherwise a socket planted by another
 user could learn our paths and hand back a URL for us to open. If the check
 fails, open mode falls back to a standalone server and sync mode exits 0.
 
@@ -267,7 +267,7 @@ Production passes `Some(15 s)`. Tests pass `None`, so the monitor never calls
   place. The client keeps `pendingScroll = { line, at }`:
   - The `scroll` event stores `pendingScroll`. If no load is in progress, it
     scrolls and highlights straight away.
-  - `loadContent` restores the previous `scrollY` as it does today, *unless*
+  - `loadContent` restores the previous `scrollY` as it does today, _unless_
     `pendingScroll` was requested less than 1.5 s before this load **started**
     (or while it ran). In that case, after `await mermaid.run`, it scrolls to
     the line again and highlights the new element. The reload replaced the
@@ -301,17 +301,17 @@ m = { command = ':sh mdpreview --line %{cursor_line} "%{buffer_name}"', label = 
 
 The rule: **open mode (`\ m`) reports problems, sync mode (`C-s`) never does.**
 
-| Situation | Open (`\ m`) | Sync (`C-s`) |
-|---|---|---|
-| File doesn't exist | stderr, exit 1 | exit 0 |
-| Not a `.md`/`.markdown` file | preview it anyway | exit 0 before touching the socket |
-| No socket or connection refused | remove the stale socket, start a server | exit 0 |
-| No reply before the timeout | stderr after 1 s, exit 1 | exit 0 after 500 ms |
-| Reply `err\t<reason>` | print the reason, exit 1 | exit 0 |
-| Socket dir unsafe (owner/mode) | warn, standalone server | exit 0 |
-| Path contains tab/newline | stderr, exit 1 | exit 0 |
-| Watcher fails on switch | silent. The page still loads, but won't live-reload | same |
-| Current file deleted or unreadable | the existing inline error in the page | same |
+| Situation                          | Open (`\ m`)                                        | Sync (`C-s`)                      |
+| ---------------------------------- | --------------------------------------------------- | --------------------------------- |
+| File doesn't exist                 | stderr, exit 1                                      | exit 0                            |
+| Not a `.md`/`.markdown` file       | preview it anyway                                   | exit 0 before touching the socket |
+| No socket or connection refused    | remove the stale socket, start a server             | exit 0                            |
+| No reply before the timeout        | stderr after 1 s, exit 1                            | exit 0 after 500 ms               |
+| Reply `err\t<reason>`              | print the reason, exit 1                            | exit 0                            |
+| Socket dir unsafe (owner/mode)     | warn, standalone server                             | exit 0                            |
+| Path contains tab/newline          | stderr, exit 1                                      | exit 0                            |
+| Watcher fails on switch            | silent. The page still loads, but won't live-reload | same                              |
+| Current file deleted or unreadable | the existing inline error in the page               | same                              |
 
 ## Testing
 

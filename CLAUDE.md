@@ -22,8 +22,12 @@ Tasks are defined in `.config/mise/config.toml`:
 mise run build          # cargo build --release
 mise run install        # build + symlink target/release/mdpreviewer into ~/.local/bin
 mise run update-vendor  # re-download assets/vendor/* (MERMAID_VERSION / GH_MD_CSS_VERSION override)
+mise run lint           # hk check --all: every linter and formatter
+mise run fix            # hk fix --all
 mise run release:check  # lint, test, and package the crate, as CI would
 ```
+
+Linting and formatting go through [hk](https://hk.jdx.dev/) (`hk.pkl`), not ad-hoc tool invocations: rustfmt, clippy, oxfmt for `assets/app.js`, yamlfmt, actionlint and zizmor for the workflows, taplo for TOML, rumdl for Markdown. `assets/vendor/` is excluded everywhere and `examples/` and `docs/superpowers/` are excluded from Markdown rules. Every tool is pinned in `.config/mise/config.toml`, and CI runs the same `mise run lint`. Git hooks are pointless here because the repo is developed with Jujutsu, which does not run them.
 
 Releases are automated with [release-plz](https://release-plz.dev/): a push to `main` keeps a version-bump PR open, and merging it publishes to crates.io, tags, creates the GitHub release and attaches macOS arm64 and Linux x86_64 binaries. The binary job hangs off the release job rather than a `release: published` trigger, because a release created with `GITHUB_TOKEN` does not start new workflow runs. Actions are pinned to commit SHAs, with Dependabot bumping them on a 7 day cooldown.
 

@@ -5,11 +5,13 @@
 **Goal:** Make the mdpreview browser tab follow Helix. `\ m` and `C-s` scroll the preview to the cursor line. A single running server is reused, and it switches to whichever Markdown file was opened or saved last.
 
 **Architecture:**
+
 - A per-user Unix socket (`control.rs`) carries one-line `open <path> <line>` requests from short-lived CLI invocations to the running server.
 - The server turns those requests into `reload` / `scroll` Server-Sent Events.
 - comrak's `data-sourcepos` attributes let the browser client map a source line to a rendered block, which it centers and briefly outlines.
 
 **Tech Stack:**
+
 - Rust 2024.
 - Crates: comrak 0.55, tiny_http 0.12, notify 8.2, open 5.4, libc (Unix).
 - `std::os::unix::net` for the socket.
@@ -45,32 +47,34 @@
 1. **Non-ASCII or space-containing file names** (`café notes.md`) must show correctly in the tab title. They must not break the `X-Mdpreview-File` header. This is pinned by `percent_encode` tests in Task 5.
 2. **`C-s` in non-Markdown buffers** must be a silent no-op that never touches the socket. This covers `[scratch]`, `main.rs` and `foo.md.bak`. `README.MD` and `notes.markdown` must still sync. This is pinned by `is_markdown` tests in Task 6.
 3. **Re-opening the file that is already current** must scroll without a reload. A reload would re-render every mermaid diagram on every `C-s`. This is pinned by an integration test in Task 5.
-4. **A socket directory that is a symlink, or that group/other users can access,** must be refused *before connecting as well as before binding*, so another user can't plant or intercept the socket. That includes `$XDG_RUNTIME_DIR` itself. This is pinned by `ensure_socket_dir` tests in Task 3, and Task 6 calls the check ahead of `send_open` in both modes.
+4. **A socket directory that is a symlink, or that group/other users can access,** must be refused _before connecting as well as before binding_, so another user can't plant or intercept the socket. That includes `$XDG_RUNTIME_DIR` itself. This is pinned by `ensure_socket_dir` tests in Task 3, and Task 6 calls the check ahead of `send_open` in both modes.
 5. **A control client that connects and never sends anything** must not stall the next `C-s` past the server's 1 s timeout. This is pinned by a listener test in Task 3.
 
 ---
 
 ## File Structure
 
-| File | Responsibility | Tasks |
-|---|---|---|
-| `src/render.rs` | Markdown → HTML, now with `data-sourcepos` | 1 |
-| `src/control.rs` (new, Unix) | Socket path, protocol, client `send_open`, server `spawn_listener`, socket cleanup | 2, 3 |
-| `src/testutil.rs` (new, test + Unix) | `TestDir`, a private temp dir removed on drop | 3 |
-| `src/watch.rs` | Sends `Event::Reload` instead of `()` | 4 |
-| `src/server.rs` | `Event`, named SSE, current document, `open` handling, `Config`, `X-Mdpreview-File` | 4, 5 |
-| `src/main.rs` | CLI parsing, open/sync modes, `--no-open`, binding before fork | 5 (small), 6 |
-| `assets/app.js`, `assets/app.css` | Named events, scroll-to-line, highlight, title, `#line=N` | 4 (small), 7 |
-| `README.md`, `CLAUDE.md`, `~/.config/helix/config.toml` | Docs and bindings | 8 |
+| File                                                    | Responsibility                                                                      | Tasks        |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------------- | ------------ |
+| `src/render.rs`                                         | Markdown → HTML, now with `data-sourcepos`                                          | 1            |
+| `src/control.rs` (new, Unix)                            | Socket path, protocol, client `send_open`, server `spawn_listener`, socket cleanup  | 2, 3         |
+| `src/testutil.rs` (new, test + Unix)                    | `TestDir`, a private temp dir removed on drop                                       | 3            |
+| `src/watch.rs`                                          | Sends `Event::Reload` instead of `()`                                               | 4            |
+| `src/server.rs`                                         | `Event`, named SSE, current document, `open` handling, `Config`, `X-Mdpreview-File` | 4, 5         |
+| `src/main.rs`                                           | CLI parsing, open/sync modes, `--no-open`, binding before fork                      | 5 (small), 6 |
+| `assets/app.js`, `assets/app.css`                       | Named events, scroll-to-line, highlight, title, `#line=N`                           | 4 (small), 7 |
+| `README.md`, `CLAUDE.md`, `~/.config/helix/config.toml` | Docs and bindings                                                                   | 8            |
 
 ---
 
 ### Task 1: Emit `data-sourcepos` from the renderer
 
 **Files:**
+
 - Modify: `src/render.rs`
 
 **Interfaces:**
+
 - Consumes: nothing new.
 - Produces: rendered HTML where block elements carry `data-sourcepos="L:C-L:C"`, with lines counted from the top of the file (front matter included). Inline elements get it too. The client filters them out in Task 7. The front matter `<details class="frontmatter">` carries the front matter node's own range, for example `data-sourcepos="1:1-4:3"`.
 
@@ -78,7 +82,7 @@
 
 In `src/render.rs`'s `mod tests`, replace the four existing tests with these and add a fifth. The expected strings come from a probe of comrak 0.55:
 
-```rust
+````rust
     #[test]
     fn front_matter_renders_as_collapsed_yaml_block() {
         let html = render_markdown("---\ntitle: Hello\ntags: [a, b]\n---\n# Body\n");
@@ -124,7 +128,7 @@ In `src/render.rs`'s `mod tests`, replace the four existing tests with these and
             "{html}"
         );
     }
-```
+````
 
 - [ ] **Step 2: Run the tests and watch them fail**
 
@@ -134,6 +138,7 @@ Expected: FAIL. Every test except `front_matter_is_escaped` fails, because no `d
 - [ ] **Step 3: Enable sourcepos and tag the front matter block**
 
 In `src/render.rs`:
+
 - Change the `use comrak::nodes::NodeValue;` import to `use comrak::nodes::{NodeValue, Sourcepos};`.
 - Add, after the `options.render.r#unsafe = true;` block:
 
@@ -196,10 +201,12 @@ data-sourcepos so the client can map an editor line to a block."
 ### Task 2: Control protocol and socket path (pure functions)
 
 **Files:**
+
 - Create: `src/control.rs`
 - Modify: `src/main.rs` (module declaration only)
 
 **Interfaces:**
+
 - Consumes: nothing.
 - Produces (all `pub`, in `crate::control`, Unix only):
   - `struct Request { pub path: PathBuf, pub line: Option<u32> }`. Derives `Debug, Clone, PartialEq, Eq`.
@@ -217,7 +224,7 @@ data-sourcepos so the client can map an editor line to a block."
 
 Create `src/control.rs`:
 
-```rust
+````rust
 //! Control channel: a per-user Unix socket through which a new `mdpreview`
 //! invocation hands its file and cursor line to an already-running server.
 //!
@@ -361,7 +368,7 @@ mod tests {
         assert_eq!(socket_path(Some(OsStr::new("run/user")), Path::new("/tmp"), 1000), expected);
     }
 }
-```
+````
 
 In `src/main.rs`, add the module declaration above `mod render;`:
 
@@ -468,11 +475,13 @@ jj commit -m "feat(control): add socket path and line protocol for the control c
 ### Task 3: Control transport (bind, client, listener, cleanup)
 
 **Files:**
+
 - Modify: `src/control.rs`
 - Create: `src/testutil.rs`
 - Modify: `src/main.rs` (module declaration only)
 
 **Interfaces:**
+
 - Consumes: Task 2's `Request`, `Reply`, `ProtocolError`, `format_*` / `parse_*`, and `current_uid`.
 - Produces (all `pub`, in `crate::control`):
   - `struct ControlSocket { pub listener: UnixListener, pub path: PathBuf, pub inode: u64 }`
@@ -868,9 +877,11 @@ compares inodes so a racing server's socket survives."
 ### Task 4: Named SSE events (`reload`, `scroll`)
 
 **Files:**
+
 - Modify: `src/server.rs`, `src/watch.rs`, `src/main.rs`, `assets/app.js`
 
 **Interfaces:**
+
 - Consumes: nothing new.
 - Produces:
   - `pub enum Event { Reload, Scroll(u32) }` in `crate::server`. It derives `Debug, Clone, Copy, PartialEq, Eq`.
@@ -929,6 +940,7 @@ fn sse_frame(event: Event) -> String {
 ```
 
 Then make these replacements in `src/server.rs`:
+
 - `type Clients = Arc<Mutex<Vec<Sender<()>>>>;` becomes `type Clients = Arc<Mutex<Vec<Sender<Event>>>>;`
 - `pub fn serve(server: Server, file: PathBuf, reload_rx: Receiver<()>)` becomes `pub fn serve(server: Server, file: PathBuf, events_rx: Receiver<Event>)`, and its body's `spawn_dispatcher(reload_rx, ...)` becomes `spawn_dispatcher(events_rx, ...)`.
 - Replace `spawn_dispatcher` with:
@@ -965,6 +977,7 @@ fn spawn_dispatcher(events_rx: Receiver<Event>, clients: Clients) {
 - Update `serve_events`'s doc comment from "stream reload events" to "stream events".
 
 In `src/watch.rs`:
+
 - Add `use crate::server::Event;` after the `notify` import.
 - In `watch_file` and `debounce_loop`, change the parameter to `events_tx: Sender<Event>`, and pass `events_tx` in the `thread::spawn` call.
 - Change the send to `if relevant && events_tx.send(Event::Reload).is_err() {`.
@@ -991,6 +1004,7 @@ cargo build -q && target/debug/mdpreview "$T/t.md"   # opens one browser tab
 ```
 
 This step opens a single browser tab, because `--no-open` only arrives in Task 6. Check two things in that tab:
+
 - Saving `$T/t.md` (for example `echo >> "$T/t.md"`) still reloads it.
 - It still exits on its own about 15 s after the tab is closed.
 
@@ -1010,9 +1024,11 @@ scroll requests too. The client now listens for the named reload event."
 ### Task 5: Switchable current document, control handling and `Config`
 
 **Files:**
+
 - Modify: `src/server.rs` (full replacement below), `src/main.rs` (`run_server` only)
 
 **Interfaces:**
+
 - Consumes:
   - `control::{ControlSocket, Request, Reply, spawn_listener, remove_socket_if_ours, bind, send_open}` from Tasks 2 and 3.
   - `watch::watch_file(&Path, Sender<Event>)` from Task 4.
@@ -1625,9 +1641,11 @@ is still ours."
 ### Task 6: CLI modes (`--line`, `--sync`, `--no-open`) and server reuse
 
 **Files:**
+
 - Modify: `src/main.rs` (full replacement below)
 
 **Interfaces:**
+
 - Consumes:
   - From Task 3: `control::{default_socket_path, bind, send_open, Request, Reply, SendError, ControlSocket}`.
   - From Task 5: `server::{Config, serve}`.
@@ -2017,6 +2035,7 @@ $BIN --bogus x.md; echo "exit $? (expect 2 with usage)"
 ```
 
 Expected:
+
 - One URL is printed, then "socket ok" and "reused".
 - The header line reads `X-Mdpreview-File: mermaid.md`.
 - The `.rs` sync prints nothing and takes under 0.05 s real time.
@@ -2035,6 +2054,7 @@ PID=$(server_pid); echo "server pid $PID"
 ```
 
 Expected:
+
 - "stale socket left behind".
 - The sync call is silent and exits 0.
 - "sync started no server".
@@ -2068,9 +2088,11 @@ the URL instead of launching a browser."
 ### Task 7: Client scroll-to-line, highlight, title and `#line=N`
 
 **Files:**
+
 - Modify: `assets/app.js` (full replacement below), `assets/app.css` (append)
 
 **Interfaces:**
+
 - Consumes:
   - SSE events `reload` and `scroll` (with `data: <line>`), from Tasks 4 and 5.
   - `data-sourcepos` on blocks, from Task 1.
@@ -2104,9 +2126,26 @@ const PENDING_SCROLL_MS = 1500;
 // Elements that make good scroll targets. comrak also puts data-sourcepos on
 // inline elements (em, code, a, ...); those are ignored.
 const BLOCK_SELECTOR = [
-  "h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "pre", "blockquote",
-  "table", "tr", "hr", "details", "ul", "ol", "section",
-].map((tag) => `${tag}[data-sourcepos]`).join(",");
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "p",
+  "li",
+  "pre",
+  "blockquote",
+  "table",
+  "tr",
+  "hr",
+  "details",
+  "ul",
+  "ol",
+  "section",
+]
+  .map((tag) => `${tag}[data-sourcepos]`)
+  .join(",");
 
 // The latest scroll request from the editor: { line, at }.
 let pendingScroll = null;
@@ -2249,7 +2288,6 @@ events.onerror = () => {
 - [ ] **Step 2: Append the highlight style to `assets/app.css`**
 
 ```css
-
 /* Scroll target: a brief outline around the block under the editor's cursor. */
 .markdown-body .mdpreview-target {
   /* The vendored dark theme's accent blue. */
@@ -2271,6 +2309,7 @@ events.onerror = () => {
 - [ ] **Step 3: Check syntax and rebuild**
 
 Run:
+
 - `command -v node >/dev/null && node --check assets/app.js`. Expected: no output, or node isn't installed.
 - `cargo test && cargo build --release`. Expected: pass. The assets are embedded, so the rebuild is required.
 
@@ -2290,6 +2329,7 @@ kill "$PID"
 ```
 
 Expected:
+
 - `1`.
 - A count well above 27.
 - The `/events` output shows `event: scroll` / `data: 110`.
@@ -2297,6 +2337,7 @@ Expected:
 - [ ] **Step 5: Ask the user to check the browser behaviour**
 
 The executor can't observe a browser. Hand these checks to the user, and note which ones pass:
+
 1. `target/release/mdpreview --line 110 examples/mermaid.md` opens a tab. It scrolls to the Block diagram, centered, with a blue outline that fades out.
 2. `target/release/mdpreview --sync --line 300 examples/mermaid.md` scrolls the same tab to the Railroad section without a reload flash.
 3. `target/release/mdpreview --sync --line 20 examples/basics.md` switches the tab to basics.md, centers the "Press Ctrl + C" paragraph, and changes the tab title to `basics.md — mdpreview`.
@@ -2320,10 +2361,12 @@ the tab title follows the previewed file."
 ### Task 8: Docs and Helix bindings
 
 **Files:**
+
 - Modify: `README.md`, `CLAUDE.md`
 - Modify (outside the repo, the user's config): `~/.config/helix/config.toml`
 
 **Interfaces:**
+
 - Consumes: the finished CLI.
 - Produces: the docs and the working editor integration.
 
@@ -2399,6 +2442,7 @@ In `## How it works`, replace the bullets with:
 - [ ] **Step 2: Update `CLAUDE.md`**
 
 Make these edits:
+
 - **Overview:** replace ``(`:sh mdpreview "%{file_path_absolute}"`)`` with ``(`:sh mdpreview --line %{cursor_line} "%{buffer_name}"`; `C-s` also runs `mdpreview --sync …` to scroll a running preview)``. Replace the "Reload only when the file is written" bullet with:
 
   ```markdown
@@ -2411,14 +2455,14 @@ Make these edits:
 - **Architecture:** change "across the four modules" to "across the five modules". Then replace items 1–3 with:
 
   ```markdown
-  1. **`main.rs`** parses `[--line N] [--no-open] [--sync] <file>`. Open mode first asks a running server over the control socket to switch to the file. If one answers, it exits, opening a tab only when no client is connected. Otherwise it binds the control socket and `127.0.0.1:0` *before* forking, so the browser opened by the parent (at `<url>#line=N`) can connect through the kernel accept backlog before the child's server loop starts. The child calls `setsid()` and redirects stdio to `/dev/null`, so the launching editor's pipe sees EOF. Sync mode only sends the request (500 ms timeout) and always exits 0 silently. On non-Unix platforms it runs in the foreground and `--sync` is a no-op.
+  1. **`main.rs`** parses `[--line N] [--no-open] [--sync] <file>`. Open mode first asks a running server over the control socket to switch to the file. If one answers, it exits, opening a tab only when no client is connected. Otherwise it binds the control socket and `127.0.0.1:0` _before_ forking, so the browser opened by the parent (at `<url>#line=N`) can connect through the kernel accept backlog before the child's server loop starts. The child calls `setsid()` and redirects stdio to `/dev/null`, so the launching editor's pipe sees EOF. Sync mode only sends the request (500 ms timeout) and always exits 0 silently. On non-Unix platforms it runs in the foreground and `--sync` is a no-op.
   2. **`control.rs`** (Unix) handles the socket:
      - Its path: `$XDG_RUNTIME_DIR/mdpreview.sock`, or a 0700 `mdpreview-<uid>` dir in the temp dir.
      - The one-line protocol: `open\t<path>\t<line>\n` → `ok\t<url>\t<clients>\n` or `err\t<reason>\n`.
      - `send_open`, which tells `NoServer` apart from `Timeout`.
      - A single-threaded listener with a 1 s per-connection timeout.
      - `remove_socket_if_ours`, which removes the socket only if its inode matches the one recorded at bind, so a racing server's socket survives.
-  3. **`watch.rs`** watches the file's *parent directory*, not the file itself, so editors that save via atomic rename don't leave a stale inode watch. It filters events down to the target path, ignores `Access` events, debounces bursts (80ms), and sends `Event::Reload` on an mpsc channel.
+  3. **`watch.rs`** watches the file's _parent directory_, not the file itself, so editors that save via atomic rename don't leave a stale inode watch. It filters events down to the target path, ignores `Access` events, debounces bursts (80ms), and sends `Event::Reload` on an mpsc channel.
   4. **`server.rs`** (tiny_http, one thread per request):
      - `serve(server, file, Config { url, idle_grace, control })` owns the event channel and the current document: a `Current { path, watcher }` behind a mutex. A control `open` for a different file replaces it (dropping the old watch) and sends `Event::Reload`. A line sends `Event::Scroll(n)`.
      - A dispatcher thread fans each `Event` out to per-client `Sender`s, one per open `/events` SSE connection, as named events (`event: reload` / `event: scroll` + `data: <line>`).
@@ -2433,6 +2477,7 @@ Make these edits:
 
   ```markdown
   **Client (`assets/app.js`)**: on load and on every `reload` event, it:
+
   - Fetches `/content`, swaps it into `#content` and sets the title from `X-Mdpreview-File`.
   - Converts `code.language-mermaid` blocks to `<pre class="mermaid">`, keeping `data-sourcepos`, and awaits `mermaid.run`.
   - Then either restores the scroll position or re-applies a recent scroll request.
@@ -2443,6 +2488,7 @@ Make these edits:
 - [ ] **Step 3: Update the Helix bindings**
 
 Edit `~/.config/helix/config.toml`. It lives outside the repo, and the user approved these bindings in the spec:
+
 - Line 99: `"C-s" = ":w" # Save (was save_selection).` becomes `"C-s" = [":w", ':sh mdpreview --sync --line %{cursor_line} "%{buffer_name}"'] # Save, then scroll a running mdpreview to the cursor (silent no-op otherwise).`
 - Line 138: `"C-s" = ["normal_mode", ":w"]` becomes `"C-s" = ["normal_mode", ":w", ':sh mdpreview --sync --line %{cursor_line} "%{buffer_name}"']`. Keep its trailing comment.
 - Line 175, the `m = …` entry in `[keys.normal."\\"]`, becomes `m = { command = ':sh mdpreview --line %{cursor_line} "%{buffer_name}"', label = "Markdown preview" } # buffer_name is cwd-relative; :sh runs in the same cwd`.
@@ -2452,6 +2498,7 @@ Then run `mise run install`. This rebuilds the release binary, and `~/.local/bin
 - [ ] **Step 4: Hand the manual Helix checklist to the user**
 
 The executor can't drive Helix. Ask the user to run these checks and report back:
+
 1. `\ m` in `examples/basics.md` opens a tab scrolled to the cursor, with the highlight.
 2. `C-s` in `examples/mermaid.md` switches the tab to it and updates the title.
 3. `C-s` in a `.rs` buffer does nothing visible: no popup, no delay.
@@ -2471,21 +2518,21 @@ jj commit -m "docs: document scroll sync, server reuse and the Helix bindings"
 
 ## Spec coverage
 
-| Spec section | Task |
-|---|---|
-| CLI flags, `parse_args`, usage and exit codes | 6 |
-| Open mode: reuse, open a tab only when there are 0 clients, `--no-open`, stale-socket recovery, bind before fork, standalone fallback | 3 (`bind`), 6 |
-| Sync mode: extension check, silence, 500 ms, never starts a server | 6 |
-| Non-Unix behaviour | 6 (`cfg` fallbacks) |
-| Socket path and `ensure_socket_dir` | 2, 3 |
-| Protocol and pure functions | 2 |
-| Listener one connection at a time, 1 s timeout, `err` for malformed requests | 3 |
-| `Event`, named SSE | 4 |
-| `Current`, `open` handling, watcher swap, `X-Mdpreview-File` | 5 |
-| Lifetime, inode-checked cleanup, `Config { idle_grace }` | 3 (`remove_socket_if_ours`), 5 |
-| Render sourcepos and front matter range | 1 |
-| Client: named listeners, mermaid sourcepos copy, `findBlock`, highlight, `pendingScroll`, `#line=N`, title | 4, 7 |
-| Helix bindings | 8 |
-| Error-handling table | 3, 5, 6 (tests and shell checks) |
-| Testing section | 1–7, plus the manual checks in 7 and 8 |
-| Docs to update | 8 |
+| Spec section                                                                                                                          | Task                                   |
+| ------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| CLI flags, `parse_args`, usage and exit codes                                                                                         | 6                                      |
+| Open mode: reuse, open a tab only when there are 0 clients, `--no-open`, stale-socket recovery, bind before fork, standalone fallback | 3 (`bind`), 6                          |
+| Sync mode: extension check, silence, 500 ms, never starts a server                                                                    | 6                                      |
+| Non-Unix behaviour                                                                                                                    | 6 (`cfg` fallbacks)                    |
+| Socket path and `ensure_socket_dir`                                                                                                   | 2, 3                                   |
+| Protocol and pure functions                                                                                                           | 2                                      |
+| Listener one connection at a time, 1 s timeout, `err` for malformed requests                                                          | 3                                      |
+| `Event`, named SSE                                                                                                                    | 4                                      |
+| `Current`, `open` handling, watcher swap, `X-Mdpreview-File`                                                                          | 5                                      |
+| Lifetime, inode-checked cleanup, `Config { idle_grace }`                                                                              | 3 (`remove_socket_if_ours`), 5         |
+| Render sourcepos and front matter range                                                                                               | 1                                      |
+| Client: named listeners, mermaid sourcepos copy, `findBlock`, highlight, `pendingScroll`, `#line=N`, title                            | 4, 7                                   |
+| Helix bindings                                                                                                                        | 8                                      |
+| Error-handling table                                                                                                                  | 3, 5, 6 (tests and shell checks)       |
+| Testing section                                                                                                                       | 1–7, plus the manual checks in 7 and 8 |
+| Docs to update                                                                                                                        | 8                                      |

@@ -1,0 +1,35 @@
+amends "package://github.com/jdx/hk/releases/download/v2.1.0/hk@2.1.0#/Config.pkl"
+import "package://github.com/jdx/hk/releases/download/v2.1.0/hk@2.1.0#/Builtins.pkl"
+
+// assets/vendor/ holds pinned upstream copies of mermaid and
+// github-markdown-css. They are refreshed with scripts/update-vendor.sh and
+// must never be reformatted, so exclude them from every step rather than
+// relying on each step to remember.
+exclude = List("assets/vendor/**")
+
+local linters = new Mapping {
+    ["cargo_fmt"] = Builtins.cargo_fmt
+    ["cargo_clippy"] = (Builtins.cargo_clippy) {
+        check = "cargo clippy --all-targets --quiet -- -D warnings"
+    }
+    ["actionlint"] = Builtins.actionlint
+    // GitHub Actions security lint: unpinned actions, injectable expressions,
+    // over-broad permissions.
+    ["zizmor"] = Builtins.zizmor
+    ["taplo"] = Builtins.taplo
+    // The builtin has no glob of its own, so it would be handed every file
+    // in the repo, including TOML and Markdown.
+    ["oxfmt"] = (Builtins.oxfmt) {
+        glob = List("**/*.js", "**/*.mjs", "**/*.cjs", "**/*.ts")
+    }
+    ["yamlfmt"] = Builtins.yamlfmt
+    // Excludes and disabled rules live in .rumdl.toml; repeat them here so
+    // they also hold when hk hands rumdl an explicit file list.
+    ["rumdl"] = (Builtins.rumdl) {
+        exclude = List("examples/**", "docs/superpowers/**")
+    }
+    ["trailing_whitespace"] = Builtins.trailing_whitespace
+    ["newlines"] = Builtins.newlines
+}
+
+steps = linters
