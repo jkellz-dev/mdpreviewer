@@ -98,6 +98,20 @@ function requestScroll(line) {
   if (loading === 0) scrollToLine(line);
 }
 
+// Send links to other sites to a new tab, so following one does not navigate
+// the preview away from the document. Relative links stay in place; they are
+// same-origin and the server answers them.
+function retargetExternalLinks() {
+  for (const link of content.querySelectorAll("a[href]")) {
+    const url = new URL(link.href, location.href);
+    const web = url.protocol === "http:" || url.protocol === "https:";
+    if (web && url.origin !== location.origin) {
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+    }
+  }
+}
+
 async function loadContent() {
   const startedAt = Date.now();
   const scrollY = window.scrollY;
@@ -117,6 +131,7 @@ async function loadContent() {
     if (name) document.title = `${decodeURIComponent(name)} — mdpreview`;
 
     content.innerHTML = html;
+    retargetExternalLinks();
 
     const blocks = collectMermaidBlocks();
     if (blocks.length > 0) {
