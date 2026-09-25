@@ -77,6 +77,16 @@ doloremque laudantium, totam rem aperiam.
 
 </details>
 
+## Images
+
+A plain image; click it to fill the window.
+
+![Lorem, a blue rectangle](data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22480%22%20height%3D%22270%22%3E%3Crect%20width%3D%22480%22%20height%3D%22270%22%20fill%3D%22%234493f8%22%2F%3E%3Ccircle%20cx%3D%22240%22%20cy%3D%22135%22%20r%3D%2290%22%20fill%3D%22%230d1117%22%2F%3E%3Ctext%20x%3D%22240%22%20y%3D%22148%22%20font-family%3D%22monospace%22%20font-size%3D%2240%22%20text-anchor%3D%22middle%22%20fill%3D%22%234493f8%22%3Elorem%3C%2Ftext%3E%3C%2Fsvg%3E)
+
+The same image inside a link, which follows the link instead of zooming.
+
+[![Lorem, a blue rectangle](data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22480%22%20height%3D%22270%22%3E%3Crect%20width%3D%22480%22%20height%3D%22270%22%20fill%3D%22%234493f8%22%2F%3E%3Ccircle%20cx%3D%22240%22%20cy%3D%22135%22%20r%3D%2290%22%20fill%3D%22%230d1117%22%2F%3E%3Ctext%20x%3D%22240%22%20y%3D%22148%22%20font-family%3D%22monospace%22%20font-size%3D%2240%22%20text-anchor%3D%22middle%22%20fill%3D%22%234493f8%22%3Elorem%3C%2Ftext%3E%3C%2Fsvg%3E)](https://example.com/)
+
 ## Long Section
 
 Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium

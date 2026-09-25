@@ -32,6 +32,95 @@ pre.mermaid svg,
   height: auto;
 }
 
+/* Diagrams and images are click-to-zoom; hint that with the cursor. */
+.markdown-body pre.mermaid,
+.markdown-body img {
+  cursor: zoom-in;
+}
+
+/* A linked image follows its link instead of zooming, so it keeps the
+ * pointer cursor. */
+.markdown-body a img {
+  cursor: pointer;
+}
+
+/*
+ * Zoom overlay: a full-window view of one diagram, image, table or code block.
+ * The figure is centered by `left/top: 50%` plus a `translate(-50%, -50%)` in
+ * the transform, so pan and zoom are a single matrix on one element.
+ */
+.mdpreview-zoom {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(1, 4, 9, 0.94);
+  overflow: hidden;
+  cursor: grab;
+  /* Keep touch gestures from scrolling the page behind the overlay. */
+  touch-action: none;
+  overscroll-behavior: contain;
+}
+
+.mdpreview-zoom[hidden] {
+  display: none;
+}
+
+.mdpreview-zoom.is-panning {
+  cursor: grabbing;
+}
+
+.mdpreview-zoom-figure {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform-origin: 50% 50%;
+  will-change: transform;
+}
+
+/* The figure carries .markdown-body so cloned tables and code keep their
+ * theme, but none of the page layout that class normally applies. */
+.mdpreview-zoom .markdown-body {
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.mdpreview-zoom-hint,
+.mdpreview-zoom-close {
+  position: absolute;
+  color: #9198a1;
+  background: rgba(13, 17, 23, 0.85);
+  border: 1px solid #3d444d;
+  border-radius: 6px;
+  font-family: system-ui, sans-serif;
+  font-size: 12px;
+}
+
+.mdpreview-zoom-hint {
+  left: 50%;
+  bottom: 1rem;
+  transform: translateX(-50%);
+  padding: 0.35rem 0.75rem;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.mdpreview-zoom-close {
+  top: 1rem;
+  right: 1rem;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.mdpreview-zoom-close:hover {
+  color: #f0f6fc;
+}
+
 /* Front matter: a muted, collapsed YAML block above the document body. */
 .markdown-body details.frontmatter {
   margin-bottom: 1.5rem;
