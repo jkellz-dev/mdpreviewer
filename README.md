@@ -43,8 +43,10 @@ auto-save = { focus-lost = true, after-delay.enable = true, after-delay.timeout 
 [keys.insert]
 "C-s" = ["normal_mode", ":w", ':sh mdpreview --sync --line %{cursor_line} "%{buffer_name}"']
 
-[keys.normal."\\"]
-m = { command = ':sh mdpreview --line %{cursor_line} "%{buffer_name}"', label = "Markdown preview" }
+[keys.normal."\\".m]
+label = "Markdown"
+m = { command = ':sh mdpreview --line %{cursor_line} "%{buffer_name}"', label = "Preview (start or switch)" }
+r = { command = ':sh mdpreview --sync --line %{cursor_line} "%{buffer_name}"', label = "Scroll preview to cursor" }
 ```
 
 `%{buffer_name}` is relative to Helix's working directory, which is also where
