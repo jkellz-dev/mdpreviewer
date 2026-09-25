@@ -54,7 +54,7 @@ document.addEventListener("DOMContentLoaded", loadContent);
 
 // Live reload. EventSource reconnects automatically if the connection drops.
 const events = new EventSource("/events");
-events.onmessage = () => loadContent();
+events.addEventListener("reload", () => loadContent());
 events.onerror = () => {
   // Transient during reconnect; nothing to do.
 };

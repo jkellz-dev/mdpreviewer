@@ -33,9 +33,26 @@ const MERMAID_JS: &[u8] = include_bytes!("../assets/vendor/mermaid.min.js");
 /// the server notice a disconnected client on the next write.
 const SSE_HEARTBEAT: Duration = Duration::from_secs(10);
 
+/// Something every open preview tab should hear about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Event {
+    /// The current document changed on disk, or another document became current.
+    Reload,
+    /// Scroll to the block containing this 1-based source line.
+    Scroll(u32),
+}
+
+/// Encode an event as a named Server-Sent Event.
+fn sse_frame(event: Event) -> String {
+    match event {
+        Event::Reload => "event: reload\ndata:\n\n".to_owned(),
+        Event::Scroll(line) => format!("event: scroll\ndata: {line}\n\n"),
+    }
+}
+
 /// Registered senders, one per connected SSE client. The dispatcher fans reload
 /// signals out to all of them.
-type Clients = Arc<Mutex<Vec<Sender<()>>>>;
+type Clients = Arc<Mutex<Vec<Sender<Event>>>>;
 
 /// Shared server state passed to each request handler thread.
 #[derive(Clone)]
@@ -47,7 +64,7 @@ struct State {
 }
 
 /// Run the preview server until it shuts itself down (see [`spawn_monitor`]).
-pub fn serve(server: Server, file: PathBuf, reload_rx: Receiver<()>) {
+pub fn serve(server: Server, file: PathBuf, events_rx: Receiver<Event>) {
     let state = State {
         file,
         clients: Arc::new(Mutex::new(Vec::new())),
@@ -55,7 +72,7 @@ pub fn serve(server: Server, file: PathBuf, reload_rx: Receiver<()>) {
         ever_connected: Arc::new(AtomicBool::new(false)),
     };
 
-    spawn_dispatcher(reload_rx, Arc::clone(&state.clients));
+    spawn_dispatcher(events_rx, Arc::clone(&state.clients));
     spawn_monitor(Arc::clone(&state.active), Arc::clone(&state.ever_connected));
 
     for request in server.incoming_requests() {
@@ -64,13 +81,13 @@ pub fn serve(server: Server, file: PathBuf, reload_rx: Receiver<()>) {
     }
 }
 
-/// Fan reload signals from the watcher out to every connected SSE client,
-/// pruning clients whose channel has closed.
-fn spawn_dispatcher(reload_rx: Receiver<()>, clients: Clients) {
+/// Fan events from the watcher (and control socket) out to every connected SSE
+/// client, pruning clients whose channel has closed.
+fn spawn_dispatcher(events_rx: Receiver<Event>, clients: Clients) {
     thread::spawn(move || {
-        while reload_rx.recv().is_ok() {
+        while let Ok(event) = events_rx.recv() {
             let mut guard = clients.lock().unwrap();
-            guard.retain(|tx| tx.send(()).is_ok());
+            guard.retain(|tx| tx.send(event).is_ok());
         }
     });
 }
@@ -144,13 +161,13 @@ fn respond(request: Request, body: &[u8], content_type: &str) {
     let _ = request.respond(response);
 }
 
-/// Register a new SSE client and stream reload events to it until it disconnects.
+/// Register a new SSE client and stream events to it until it disconnects.
 ///
 /// tiny_http's chunked response writer buffers small writes, which would stall
 /// an event stream, so we take the raw socket via `into_writer` and speak the
 /// minimal SSE protocol ourselves, flushing after every event.
 fn serve_events(request: Request, state: &State) {
-    let (tx, rx) = channel::<()>();
+    let (tx, rx) = channel::<Event>();
     state.clients.lock().unwrap().push(tx);
     state.ever_connected.store(true, Ordering::Relaxed);
     let _guard = ActiveGuard::new(Arc::clone(&state.active));
@@ -172,13 +189,13 @@ fn serve_events(request: Request, state: &State) {
     }
 
     loop {
-        let event: &[u8] = match rx.recv_timeout(SSE_HEARTBEAT) {
-            Ok(()) => b"data: reload\n\n",
+        let frame = match rx.recv_timeout(SSE_HEARTBEAT) {
+            Ok(event) => sse_frame(event),
             // Heartbeat comment; also how a dead socket is detected (write fails).
-            Err(RecvTimeoutError::Timeout) => b": ping\n\n",
+            Err(RecvTimeoutError::Timeout) => ": ping\n\n".to_owned(),
             Err(RecvTimeoutError::Disconnected) => break,
         };
-        if write_flush(&mut writer, event).is_err() {
+        if write_flush(&mut writer, frame.as_bytes()).is_err() {
             break;
         }
     }
@@ -203,5 +220,20 @@ impl ActiveGuard {
 impl Drop for ActiveGuard {
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Event, sse_frame};
+
+    #[test]
+    fn reload_is_a_named_event_with_empty_data() {
+        assert_eq!(sse_frame(Event::Reload), "event: reload\ndata:\n\n");
+    }
+
+    #[test]
+    fn scroll_carries_the_line() {
+        assert_eq!(sse_frame(Event::Scroll(42)), "event: scroll\ndata: 42\n\n");
     }
 }

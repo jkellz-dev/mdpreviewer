@@ -119,7 +119,7 @@ fn detach_child() {
 
 /// Wire the watcher to the server and serve until the process exits.
 fn run_server(listener: TcpListener, file: PathBuf) {
-    let (reload_tx, reload_rx) = channel::<()>();
+    let (reload_tx, reload_rx) = channel::<server::Event>();
 
     // Keep the watcher alive for the lifetime of the process by holding it until
     // `serve` returns (which it does only at shutdown).

@@ -12,12 +12,14 @@ use std::time::{Duration, Instant};
 
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
+use crate::server::Event;
+
 const DEBOUNCE: Duration = Duration::from_millis(80);
 
-/// Start watching `path`, sending `()` on `reload_tx` whenever the file's
-/// contents may have changed. The returned watcher must be kept alive for the
+/// Start watching `path`, sending [`Event::Reload`] on `events_tx` whenever the
+/// file's contents may have changed. The returned watcher must be kept alive for the
 /// duration of the watch; dropping it stops watching.
-pub fn watch_file(path: &Path, reload_tx: Sender<()>) -> notify::Result<RecommendedWatcher> {
+pub fn watch_file(path: &Path, events_tx: Sender<Event>) -> notify::Result<RecommendedWatcher> {
     let target = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let parent = target
         .parent()
@@ -30,7 +32,7 @@ pub fn watch_file(path: &Path, reload_tx: Sender<()>) -> notify::Result<Recommen
     })?;
     watcher.watch(&parent, RecursiveMode::NonRecursive)?;
 
-    std::thread::spawn(move || debounce_loop(raw_rx, reload_tx, target));
+    std::thread::spawn(move || debounce_loop(raw_rx, events_tx, target));
 
     Ok(watcher)
 }
@@ -38,7 +40,7 @@ pub fn watch_file(path: &Path, reload_tx: Sender<()>) -> notify::Result<Recommen
 /// Coalesce raw filesystem events into debounced reload signals.
 fn debounce_loop(
     raw_rx: Receiver<notify::Result<notify::Event>>,
-    reload_tx: Sender<()>,
+    events_tx: Sender<Event>,
     target: PathBuf,
 ) {
     loop {
@@ -61,7 +63,7 @@ fn debounce_loop(
             }
         }
 
-        if relevant && reload_tx.send(()).is_err() {
+        if relevant && events_tx.send(Event::Reload).is_err() {
             return;
         }
     }
