@@ -13,6 +13,8 @@ mdpreviewer [--line N] [--no-open] path/to/file.md   # open a preview (or reuse 
 mdpreviewer --sync [--line N] path/to/file.md        # update a running preview only
 mdpreviewer --restart [--line N] path/to/file.md     # stop any running server, then open
 mdpreviewer --quit                                   # stop the running server
+mdpreviewer --help                                   # list the options
+mdpreviewer --version                                # print the version
 ```
 
 The first run binds a random local port, opens your default browser at that
@@ -38,6 +40,9 @@ the open tab switches to the new file. A new tab opens only if none is open.
   into the binary, so after a rebuild this is how you get a running server to
   serve the new ones.
 - `--no-open` prints the URL instead of opening a browser.
+- `--help` and `--version` answer and exit without starting or contacting a
+  server. They are also accepted as `-h` and `-V`, and `--help` is honoured
+  even when the rest of the command line is wrong.
 
 ### Zooming a diagram or image
 

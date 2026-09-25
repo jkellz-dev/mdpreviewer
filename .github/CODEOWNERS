@@ -1,0 +1,9 @@
+# Review ownership. GitHub requests a review from the owners of every file a
+# pull request touches. See MAINTAINERS.md for who these people are and what
+# they look after.
+#
+# Later rules win over earlier ones, so the catch-all goes first. There is one
+# maintainer today, so per-directory rules would name the same person and earn
+# nothing; add them when ownership actually diverges.
+
+* @jkellz-dev
