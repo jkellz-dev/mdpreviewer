@@ -65,8 +65,13 @@ pre.mermaid svg,
   display: none;
 }
 
+/* While panning, text must not select: the drag is a pan, not a selection.
+ * This lasts only for the drag, so double-click and triple-click selection
+ * inside a zoomed code block still work. */
 .mdpreview-zoom.is-panning {
   cursor: grabbing;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .mdpreview-zoom-figure {

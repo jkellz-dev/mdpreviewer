@@ -381,6 +381,11 @@ overlay.addEventListener("pointermove", (event) => {
   const dx = event.clientX - pan.x;
   const dy = event.clientY - pan.y;
   if (!pan.moved && Math.hypot(dx, dy) < PAN_SLOP_PX) return;
+  if (!pan.moved) {
+    // The pointer crossed the threshold, so this is a pan. The browser may
+    // have selected a few characters on the way there; drop them.
+    window.getSelection()?.removeAllRanges();
+  }
   pan.moved = true;
   overlay.classList.add("is-panning");
   zoom.tx = pan.tx + dx;
