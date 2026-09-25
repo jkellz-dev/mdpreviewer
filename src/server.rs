@@ -75,6 +75,11 @@ pub struct Config {
     /// Where to accept `open` requests. `None` runs a standalone server.
     #[cfg(unix)]
     pub control: Option<control::ControlSocket>,
+    /// Whether a control `quit` ends the process. Always true in production;
+    /// the in-process integration tests set it false, for the same reason
+    /// they disable `idle_grace`.
+    #[cfg(unix)]
+    pub exit_on_quit: bool,
 }
 
 /// Registered senders, one per connected SSE client. The dispatcher fans
@@ -120,7 +125,7 @@ pub fn serve(server: Server, file: PathBuf, config: Config) {
 
     spawn_dispatcher(events_rx, Arc::clone(&state.clients));
 
-    // Answer `open` requests, and remember the socket to remove it on exit.
+    // Answer control requests, and remember the socket to remove it on exit.
     #[cfg(unix)]
     let socket = config.control.map(
         |control::ControlSocket {
@@ -130,7 +135,19 @@ pub fn serve(server: Server, file: PathBuf, config: Config) {
          }| {
             let handler_state = state.clone();
             let url = config.url.clone();
-            control::spawn_listener(listener, move |request| handler_state.open(request, &url));
+            let quit_socket = (path.clone(), inode);
+            let exit_on_quit = config.exit_on_quit;
+            control::spawn_listener(
+                listener,
+                move |open| handler_state.open(open, &url),
+                move || {
+                    if exit_on_quit {
+                        let (path, inode) = &quit_socket;
+                        control::remove_socket_if_ours(path, *inode);
+                        process::exit(0);
+                    }
+                },
+            );
             (path, inode)
         },
     );
@@ -160,8 +177,8 @@ impl State {
     /// Handle a control-socket `open`: make `path` the current document (if it
     /// is not already) and ask every tab to scroll to `line`.
     #[cfg(unix)]
-    fn open(&self, request: control::Request, url: &str) -> control::Reply {
-        let control::Request { path, line } = request;
+    fn open(&self, open: control::Open, url: &str) -> control::Reply {
+        let control::Open { path, line } = open;
         if !path.is_absolute() {
             return control::Reply::Err(format!("not an absolute path: {}", path.display()));
         }
@@ -502,6 +519,8 @@ mod integration_tests {
             url: format!("http://{http}/"),
             idle_grace: None,
             control: Some(control::bind(&socket).unwrap()),
+            // A quit must not take the test runner with it.
+            exit_on_quit: false,
         };
         let server = tiny_http::Server::from_listener(listener, None).unwrap();
         let file = file.to_owned();
@@ -510,11 +529,11 @@ mod integration_tests {
     }
 
     fn open(preview: &Preview, path: &Path, line: Option<u32>) -> Reply {
-        let request = Request {
+        let request = Request::Open(control::Open {
             path: path.to_owned(),
             line,
-        };
-        control::send_open(&preview.socket, &request, WAIT).unwrap()
+        });
+        control::send(&preview.socket, &request, WAIT).unwrap()
     }
 
     fn get(preview: &Preview, path: &str) -> String {

@@ -1,11 +1,14 @@
 //! Control channel: a per-user Unix socket through which a new `mdpreview`
-//! invocation hands its file and cursor line to an already-running server.
+//! invocation hands its file and cursor line to an already-running server, or
+//! asks it to exit.
 //!
 //! One request and one reply per connection, each a single tab-separated line:
 //!
 //! ```text
 //! request:  open\t<absolute path>\t<line or empty>\n
+//!           quit\n
 //! reply:    ok\t<url>\t<active SSE clients>\n
+//!           bye\n
 //!           err\t<reason>\n
 //! ```
 
@@ -29,9 +32,16 @@ const MAX_REQUEST: u64 = 8 * 1024;
 
 /// Show `path` and, if given, scroll to 1-based source `line`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Request {
+pub struct Open {
     pub path: PathBuf,
     pub line: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Request {
+    Open(Open),
+    /// Stop the server. Answered with [`Reply::Bye`] before it goes.
+    Quit,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,6 +51,8 @@ pub enum Reply {
         url: String,
         clients: usize,
     },
+    /// A [`Request::Quit`] was accepted; the server is on its way out.
+    Bye,
     Err(String),
 }
 
@@ -56,17 +68,17 @@ impl fmt::Display for ProtocolError {
 /// Encode a request. Paths must be UTF-8 and free of tabs and newlines, which
 /// would break the line format.
 pub fn format_request(request: &Request) -> Result<String, ProtocolError> {
-    let path = request
+    let Request::Open(open) = request else {
+        return Ok("quit\n".to_owned());
+    };
+    let path = open
         .path
         .to_str()
         .ok_or(ProtocolError("path is not valid UTF-8"))?;
     if path.contains(['\t', '\n']) {
         return Err(ProtocolError("path contains a tab or newline"));
     }
-    let line = request
-        .line
-        .map(|line| line.to_string())
-        .unwrap_or_default();
+    let line = open.line.map(|line| line.to_string()).unwrap_or_default();
     Ok(format!("open\t{path}\t{line}\n"))
 }
 
@@ -76,18 +88,19 @@ pub fn parse_request(line: &str) -> Result<Request, ProtocolError> {
         .ok_or(ProtocolError("missing newline"))?;
     let mut fields = line.split('\t');
     match (fields.next(), fields.next(), fields.next(), fields.next()) {
+        (Some("quit"), None, None, None) => Ok(Request::Quit),
         (Some("open"), Some(path), Some(line), None) if !path.is_empty() => {
             let line = if line.is_empty() {
                 None
             } else {
                 Some(line.parse().map_err(|_| ProtocolError("bad line number"))?)
             };
-            Ok(Request {
+            Ok(Request::Open(Open {
                 path: PathBuf::from(path),
                 line,
-            })
+            }))
         }
-        _ => Err(ProtocolError("expected open<TAB>path<TAB>line")),
+        _ => Err(ProtocolError("expected open<TAB>path<TAB>line, or quit")),
     }
 }
 
@@ -95,6 +108,7 @@ pub fn parse_request(line: &str) -> Result<Request, ProtocolError> {
 pub fn format_reply(reply: &Reply) -> String {
     match reply {
         Reply::Ok { url, clients } => format!("ok\t{url}\t{clients}\n"),
+        Reply::Bye => "bye\n".to_owned(),
         Reply::Err(reason) => format!("err\t{}\n", reason.replace(['\t', '\n'], " ")),
     }
 }
@@ -103,6 +117,9 @@ pub fn parse_reply(line: &str) -> Result<Reply, ProtocolError> {
     let line = line
         .strip_suffix('\n')
         .ok_or(ProtocolError("missing newline"))?;
+    if line == "bye" {
+        return Ok(Reply::Bye);
+    }
     match line.split_once('\t') {
         Some(("ok", rest)) => {
             let (url, clients) = rest.split_once('\t').ok_or(ProtocolError("bad reply"))?;
@@ -216,9 +233,9 @@ pub fn bind(path: &Path) -> io::Result<ControlSocket> {
     })
 }
 
-/// Send one `open` request to the server listening on `socket` and wait up to
+/// Send one request to the server listening on `socket` and wait up to
 /// `timeout` (per read or write) for its reply.
-pub fn send_open(socket: &Path, request: &Request, timeout: Duration) -> Result<Reply, SendError> {
+pub fn send(socket: &Path, request: &Request, timeout: Duration) -> Result<Reply, SendError> {
     let message = format_request(request).map_err(SendError::Protocol)?;
     let stream = UnixStream::connect(socket).map_err(|err| match err.kind() {
         io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused => SendError::NoServer,
@@ -252,28 +269,49 @@ fn timeout_or_io(err: io::Error) -> SendError {
 /// background thread. Each request is only a mutex update and a channel send,
 /// so there is nothing to gain from concurrency; the per-connection timeout
 /// keeps one silent client from blocking the next.
-pub fn spawn_listener<F>(listener: UnixListener, handle: F)
+///
+/// `handle` only ever sees an [`Open`]: a [`Request::Quit`] is answered here,
+/// and `on_quit` is called once that `bye` has been written, so the client
+/// sees a reply rather than a closed connection.
+pub fn spawn_listener<F, Q>(listener: UnixListener, handle: F, on_quit: Q)
 where
-    F: Fn(Request) -> Reply + Send + 'static,
+    F: Fn(Open) -> Reply + Send + 'static,
+    Q: Fn() + Send + 'static,
 {
     thread::spawn(move || {
         for stream in listener.incoming().flatten() {
-            let _ = serve_connection(&stream, &handle);
+            if let Ok(Outcome::Quit) = serve_connection(&stream, &handle) {
+                on_quit();
+            }
         }
     });
 }
 
-fn serve_connection(stream: &UnixStream, handle: &impl Fn(Request) -> Reply) -> io::Result<()> {
+/// What a served connection asked for, once its reply has been written.
+enum Outcome {
+    Handled,
+    Quit,
+}
+
+fn serve_connection(stream: &UnixStream, handle: &impl Fn(Open) -> Reply) -> io::Result<Outcome> {
     stream.set_read_timeout(Some(SERVER_TIMEOUT))?;
     stream.set_write_timeout(Some(SERVER_TIMEOUT))?;
     let mut line = String::new();
     BufReader::new(stream.take(MAX_REQUEST)).read_line(&mut line)?;
-    let reply = match parse_request(&line) {
-        Ok(request) => handle(request),
-        Err(err) => Reply::Err(format!("bad request: {err}")),
+    let (reply, outcome) = match parse_request(&line) {
+        Ok(Request::Open(open)) => (handle(open), Outcome::Handled),
+        Ok(Request::Quit) => (Reply::Bye, Outcome::Quit),
+        Err(err) => (Reply::Err(format!("bad request: {err}")), Outcome::Handled),
     };
     let mut writer = stream;
-    writer.write_all(format_reply(&reply).as_bytes())
+    writer.write_all(format_reply(&reply).as_bytes())?;
+    Ok(outcome)
+}
+
+/// Whether a server is still listening on `socket`. Used to wait out a server
+/// that has been asked to quit before starting its replacement.
+pub fn is_listening(socket: &Path) -> bool {
+    UnixStream::connect(socket).is_ok()
 }
 
 /// Remove the socket at `path` if it is still the one bound with `inode`. If a
@@ -288,6 +326,8 @@ pub fn remove_socket_if_ours(path: &Path, inode: u64) {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Instant;
 
     use crate::testutil::TestDir;
@@ -295,10 +335,10 @@ mod tests {
     const WAIT: Duration = Duration::from_secs(3);
 
     fn request(path: &str, line: Option<u32>) -> Request {
-        Request {
+        Request::Open(Open {
             path: PathBuf::from(path),
             line,
-        }
+        })
     }
 
     #[test]
@@ -333,6 +373,8 @@ mod tests {
             "open\t\t1\n",            // empty path
             "open\t/tmp/x.md\tabc\n", // non-numeric line
             "open\t/tmp/x.md\t1\textra\n",
+            "quit\textra\n", // quit takes no fields
+            "quit",          // no trailing newline
         ] {
             assert!(parse_request(wire).is_err(), "accepted {wire:?}");
         }
@@ -350,6 +392,16 @@ mod tests {
         let err = Reply::Err("not a file: /x".into());
         assert_eq!(format_reply(&err), "err\tnot a file: /x\n");
         assert_eq!(parse_reply(&format_reply(&err)), Ok(err));
+
+        assert_eq!(format_reply(&Reply::Bye), "bye\n");
+        assert_eq!(parse_reply("bye\n"), Ok(Reply::Bye));
+    }
+
+    #[test]
+    fn a_quit_request_round_trips() {
+        let wire = format_request(&Request::Quit).unwrap();
+        assert_eq!(wire, "quit\n");
+        assert_eq!(parse_request(&wire), Ok(Request::Quit));
     }
 
     #[test]
@@ -424,16 +476,20 @@ mod tests {
     }
 
     #[test]
-    fn send_open_round_trips_through_the_listener() {
+    fn send_round_trips_through_the_listener() {
         let dir = TestDir::new("round-trip");
         let socket = dir.join(SOCKET_NAME);
         let control = bind(&socket).unwrap();
-        spawn_listener(control.listener, |request| Reply::Ok {
-            url: request.path.display().to_string(),
-            clients: request.line.unwrap_or(0) as usize,
-        });
+        spawn_listener(
+            control.listener,
+            |open| Reply::Ok {
+                url: open.path.display().to_string(),
+                clients: open.line.unwrap_or(0) as usize,
+            },
+            || unreachable!("no quit was sent"),
+        );
 
-        let reply = send_open(&socket, &request("/x/a b.md", Some(4)), WAIT).unwrap();
+        let reply = send(&socket, &request("/x/a b.md", Some(4)), WAIT).unwrap();
         assert_eq!(
             reply,
             Reply::Ok {
@@ -444,9 +500,9 @@ mod tests {
     }
 
     #[test]
-    fn send_open_reports_no_server_without_a_socket() {
+    fn send_reports_no_server_without_a_socket() {
         let dir = TestDir::new("no-socket");
-        let result = send_open(&dir.join(SOCKET_NAME), &request("/x.md", None), WAIT);
+        let result = send(&dir.join(SOCKET_NAME), &request("/x.md", None), WAIT);
         assert!(matches!(result, Err(SendError::NoServer)), "{result:?}");
     }
 
@@ -454,7 +510,7 @@ mod tests {
     fn an_unusable_socket_path_is_reported_as_such() {
         // Longer than sun_path (108 bytes on Linux): connect cannot even try.
         let socket = PathBuf::from(format!("/tmp/{}/{SOCKET_NAME}", "x".repeat(200)));
-        let result = send_open(&socket, &request("/x.md", None), WAIT);
+        let result = send(&socket, &request("/x.md", None), WAIT);
         assert!(matches!(result, Err(SendError::Unusable(_))), "{result:?}");
     }
 
@@ -465,20 +521,20 @@ mod tests {
         drop(bind(&socket).unwrap()); // The file stays behind, like after a crash.
         assert!(socket.exists());
 
-        let result = send_open(&socket, &request("/x.md", None), WAIT);
+        let result = send(&socket, &request("/x.md", None), WAIT);
         assert!(matches!(result, Err(SendError::NoServer)), "{result:?}");
         bind(&socket).expect("bind replaces the stale socket");
     }
 
     #[test]
-    fn send_open_times_out_on_a_silent_server() {
+    fn send_times_out_on_a_silent_server() {
         let dir = TestDir::new("silent-server");
         let socket = dir.join(SOCKET_NAME);
         // Never accepted: the connection sits in the backlog, unanswered.
         let _listener = UnixListener::bind(&socket).unwrap();
 
         let started = Instant::now();
-        let result = send_open(&socket, &request("/x.md", None), Duration::from_millis(200));
+        let result = send(&socket, &request("/x.md", None), Duration::from_millis(200));
         assert!(matches!(result, Err(SendError::Timeout)), "{result:?}");
         assert!(started.elapsed() < Duration::from_secs(2));
     }
@@ -488,17 +544,21 @@ mod tests {
         let dir = TestDir::new("silent-client");
         let socket = dir.join(SOCKET_NAME);
         let control = bind(&socket).unwrap();
-        spawn_listener(control.listener, |_| Reply::Ok {
-            url: "u".into(),
-            clients: 0,
-        });
+        spawn_listener(
+            control.listener,
+            |_| Reply::Ok {
+                url: "u".into(),
+                clients: 0,
+            },
+            || unreachable!("no quit was sent"),
+        );
 
         // Connects and never sends anything.
         let _idle = UnixStream::connect(&socket).unwrap();
         thread::sleep(Duration::from_millis(50));
 
         let started = Instant::now();
-        let reply = send_open(&socket, &request("/x.md", None), WAIT).unwrap();
+        let reply = send(&socket, &request("/x.md", None), WAIT).unwrap();
         assert_eq!(
             reply,
             Reply::Ok {
@@ -515,7 +575,11 @@ mod tests {
         let dir = TestDir::new("malformed");
         let socket = dir.join(SOCKET_NAME);
         let control = bind(&socket).unwrap();
-        spawn_listener(control.listener, |_| unreachable!("handler must not run"));
+        spawn_listener(
+            control.listener,
+            |_| unreachable!("handler must not run"),
+            || unreachable!("no quit was sent"),
+        );
 
         let mut stream = UnixStream::connect(&socket).unwrap();
         stream.set_read_timeout(Some(WAIT)).unwrap();
@@ -523,6 +587,41 @@ mod tests {
         let mut reply = String::new();
         BufReader::new(stream).read_line(&mut reply).unwrap();
         assert!(reply.starts_with("err\tbad request"), "{reply:?}");
+    }
+
+    #[test]
+    fn a_quit_is_acknowledged_and_then_acted_on() {
+        let dir = TestDir::new("quit");
+        let socket = dir.join(SOCKET_NAME);
+        let control = bind(&socket).unwrap();
+        let quit = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&quit);
+        spawn_listener(
+            control.listener,
+            |_| unreachable!("a quit never reaches the handler"),
+            move || flag.store(true, Ordering::SeqCst),
+        );
+
+        // The client gets `bye`, so the request is answered, not dropped.
+        assert_eq!(send(&socket, &Request::Quit, WAIT).unwrap(), Reply::Bye);
+
+        let deadline = Instant::now() + WAIT;
+        while !quit.load(Ordering::SeqCst) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(quit.load(Ordering::SeqCst), "on_quit was never called");
+    }
+
+    #[test]
+    fn is_listening_only_sees_a_bound_socket() {
+        let dir = TestDir::new("listening");
+        let socket = dir.join(SOCKET_NAME);
+        assert!(!is_listening(&socket));
+        let control = bind(&socket).unwrap();
+        assert!(is_listening(&socket));
+        drop(control);
+        remove_socket_if_ours(&socket, 0);
+        assert!(!is_listening(&socket));
     }
 
     #[test]
