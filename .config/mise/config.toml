@@ -1,5 +1,8 @@
 [tools]
-rust = "latest"
+# Pinned rather than "latest" so CI and local runs agree. rustup installs a
+# minimal toolchain by default, which has no cargo-fmt or clippy, so the lint
+# steps need these components requested explicitly.
+rust = { version = "1.98.1", components = ["rustfmt", "clippy"] }
 actionlint = "latest"
 release-plz = "latest"
 hk = "2.1.0"
