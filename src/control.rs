@@ -153,6 +153,9 @@ pub enum SendError {
     NoServer,
     /// A server accepted the connection but did not answer in time.
     Timeout,
+    /// The socket path cannot be connected to at all (for example, it is
+    /// longer than the platform allows), so no server can be reached there.
+    Unusable(io::Error),
     Protocol(ProtocolError),
     Io(io::Error),
 }
@@ -162,6 +165,7 @@ impl fmt::Display for SendError {
         match self {
             SendError::NoServer => f.write_str("no preview server is running"),
             SendError::Timeout => f.write_str("the preview server did not respond"),
+            SendError::Unusable(err) => write!(f, "control socket is unusable: {err}"),
             SendError::Protocol(err) => write!(f, "control protocol error: {err}"),
             SendError::Io(err) => write!(f, "control socket error: {err}"),
         }
@@ -218,6 +222,7 @@ pub fn send_open(socket: &Path, request: &Request, timeout: Duration) -> Result<
     let message = format_request(request).map_err(SendError::Protocol)?;
     let stream = UnixStream::connect(socket).map_err(|err| match err.kind() {
         io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused => SendError::NoServer,
+        io::ErrorKind::InvalidInput => SendError::Unusable(err),
         _ => SendError::Io(err),
     })?;
     stream
@@ -443,6 +448,14 @@ mod tests {
         let dir = TestDir::new("no-socket");
         let result = send_open(&dir.join(SOCKET_NAME), &request("/x.md", None), WAIT);
         assert!(matches!(result, Err(SendError::NoServer)), "{result:?}");
+    }
+
+    #[test]
+    fn an_unusable_socket_path_is_reported_as_such() {
+        // Longer than sun_path (108 bytes on Linux): connect cannot even try.
+        let socket = PathBuf::from(format!("/tmp/{}/{SOCKET_NAME}", "x".repeat(200)));
+        let result = send_open(&socket, &request("/x.md", None), WAIT);
+        assert!(matches!(result, Err(SendError::Unusable(_))), "{result:?}");
     }
 
     #[test]

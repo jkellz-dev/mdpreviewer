@@ -41,6 +41,10 @@ const MERMAID_JS: &[u8] = include_bytes!("../assets/vendor/mermaid.min.js");
 /// the server notice a disconnected client on the next write.
 const SSE_HEARTBEAT: Duration = Duration::from_secs(10);
 
+/// The pause after each probe ping in [`State::live_clients`]; plenty for a
+/// loopback peer's reset to arrive.
+const PROBE_GAP: Duration = Duration::from_millis(25);
+
 /// Something every open preview tab should hear about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Event {
@@ -48,6 +52,8 @@ pub enum Event {
     Reload,
     /// Scroll to the block containing this 1-based source line.
     Scroll(u32),
+    /// A heartbeat comment, sent now to find out which tabs have closed.
+    Ping,
 }
 
 /// Encode an event as a named Server-Sent Event.
@@ -55,6 +61,7 @@ fn sse_frame(event: Event) -> String {
     match event {
         Event::Reload => "event: reload\ndata:\n\n".to_owned(),
         Event::Scroll(line) => format!("event: scroll\ndata: {line}\n\n"),
+        Event::Ping => ": ping\n\n".to_owned(),
     }
 }
 
@@ -90,6 +97,9 @@ struct State {
     clients: Clients,
     active: Arc<AtomicUsize>,
     ever_connected: Arc<AtomicBool>,
+    /// Set by each `open` request, so the monitor restarts its countdown
+    /// while a tab the CLI just opened is still connecting.
+    opened: Arc<AtomicBool>,
 }
 
 /// Run the preview server until it shuts itself down (see [`spawn_monitor`]).
@@ -105,6 +115,7 @@ pub fn serve(server: Server, file: PathBuf, config: Config) {
         clients: Arc::new(Mutex::new(Vec::new())),
         active: Arc::new(AtomicUsize::new(0)),
         ever_connected: Arc::new(AtomicBool::new(false)),
+        opened: Arc::new(AtomicBool::new(false)),
     };
 
     spawn_dispatcher(events_rx, Arc::clone(&state.clients));
@@ -128,6 +139,7 @@ pub fn serve(server: Server, file: PathBuf, config: Config) {
         spawn_monitor(
             Arc::clone(&state.active),
             Arc::clone(&state.ever_connected),
+            Arc::clone(&state.opened),
             grace,
             move || {
                 #[cfg(unix)]
@@ -156,6 +168,7 @@ impl State {
         if !path.is_file() {
             return control::Reply::Err(format!("not a file: {}", path.display()));
         }
+        self.opened.store(true, Ordering::Relaxed);
         {
             let mut current = self.current.lock().unwrap();
             if current.path != path {
@@ -173,8 +186,25 @@ impl State {
         }
         control::Reply::Ok {
             url: url.to_owned(),
-            clients: self.active.load(Ordering::Relaxed),
+            clients: self.live_clients(),
         }
+    }
+
+    /// The number of connected tabs, after flushing out any that closed since
+    /// the last heartbeat. A write to a closed peer succeeds once (the peer
+    /// answers with a reset) and fails the next time, so two pings a moment
+    /// apart make every closed tab drop out. Open mode relies on this count to
+    /// decide whether to open a new tab.
+    #[cfg(unix)]
+    fn live_clients(&self) -> usize {
+        for _ in 0..2 {
+            if self.active.load(Ordering::Relaxed) == 0 {
+                break;
+            }
+            let _ = self.events_tx.send(Event::Ping);
+            thread::sleep(PROBE_GAP);
+        }
+        self.active.load(Ordering::Relaxed)
     }
 }
 
@@ -204,30 +234,58 @@ fn spawn_dispatcher(events_rx: Receiver<Event>, clients: Clients) {
 /// Exit the process once every client has been gone for `grace`, so a closed
 /// browser tab does not leave an orphaned server running forever. Only arms
 /// after the first client has connected, so the browser has time to open.
-/// `on_exit` runs just before the process exits.
+/// An `open` request restarts the countdown. `on_exit` runs just before the
+/// process exits.
 fn spawn_monitor(
     active: Arc<AtomicUsize>,
     ever_connected: Arc<AtomicBool>,
+    opened: Arc<AtomicBool>,
     grace: Duration,
     on_exit: impl Fn() + Send + 'static,
 ) {
     const STEP: Duration = Duration::from_secs(3);
     thread::spawn(move || {
-        let mut idle = Duration::ZERO;
+        let mut clock = IdleClock::new(grace);
         loop {
             thread::sleep(STEP);
             let armed = ever_connected.load(Ordering::Relaxed);
-            if armed && active.load(Ordering::Relaxed) == 0 {
-                idle += STEP;
-                if idle >= grace {
-                    on_exit();
-                    process::exit(0);
-                }
-            } else {
-                idle = Duration::ZERO;
+            let active = active.load(Ordering::Relaxed);
+            let opened = opened.swap(false, Ordering::Relaxed);
+            if clock.tick(STEP, armed, active, opened) {
+                on_exit();
+                process::exit(0);
             }
         }
     });
+}
+
+/// The shutdown monitor's decision, kept apart from its thread and clock.
+struct IdleClock {
+    grace: Duration,
+    idle: Duration,
+}
+
+impl IdleClock {
+    fn new(grace: Duration) -> Self {
+        IdleClock {
+            grace,
+            idle: Duration::ZERO,
+        }
+    }
+
+    /// Account for `step` having passed, and return whether the server has now
+    /// been idle for the grace period. `armed` is whether any client has ever
+    /// connected, `active` how many are connected now, and `opened` whether an
+    /// `open` request arrived during the step.
+    fn tick(&mut self, step: Duration, armed: bool, active: usize, opened: bool) -> bool {
+        if armed && active == 0 && !opened {
+            self.idle += step;
+            self.idle >= self.grace
+        } else {
+            self.idle = Duration::ZERO;
+            false
+        }
+    }
 }
 
 fn handle(request: Request, state: &State) {
@@ -331,7 +389,7 @@ fn serve_events(request: Request, state: &State) {
         let frame = match rx.recv_timeout(SSE_HEARTBEAT) {
             Ok(event) => sse_frame(event),
             // Heartbeat comment; also how a dead socket is detected (write fails).
-            Err(RecvTimeoutError::Timeout) => ": ping\n\n".to_owned(),
+            Err(RecvTimeoutError::Timeout) => sse_frame(Event::Ping),
             Err(RecvTimeoutError::Disconnected) => break,
         };
         if write_flush(&mut writer, frame.as_bytes()).is_err() {
@@ -364,7 +422,37 @@ impl Drop for ActiveGuard {
 
 #[cfg(test)]
 mod tests {
-    use super::{Event, percent_encode, sse_frame};
+    use std::time::Duration;
+
+    use super::{Event, IdleClock, percent_encode, sse_frame};
+
+    const STEP: Duration = Duration::from_secs(3);
+
+    #[test]
+    fn the_server_idles_out_after_the_grace_period() {
+        let mut clock = IdleClock::new(Duration::from_secs(15));
+        // Not armed until a first client connects.
+        assert!(!clock.tick(STEP * 10, false, 0, false));
+        for _ in 0..4 {
+            assert!(!clock.tick(STEP, true, 0, false));
+        }
+        assert!(clock.tick(STEP, true, 0, false));
+    }
+
+    #[test]
+    fn an_open_request_restarts_the_idle_countdown() {
+        let mut clock = IdleClock::new(Duration::from_secs(15));
+        for _ in 0..4 {
+            assert!(!clock.tick(STEP, true, 0, false));
+        }
+        // The CLI was told there are no clients and is opening a tab: give it
+        // the full grace period to connect.
+        assert!(!clock.tick(STEP, true, 0, true));
+        for _ in 0..4 {
+            assert!(!clock.tick(STEP, true, 0, false));
+        }
+        assert!(clock.tick(STEP, true, 0, false));
+    }
 
     #[test]
     fn reload_is_a_named_event_with_empty_data() {
@@ -553,6 +641,23 @@ mod integration_tests {
         // The new file is watched.
         fs::write(&b, "# B changed\n").unwrap();
         assert_eq!(events.next(), "event: reload\ndata:\n\n");
+    }
+
+    #[test]
+    fn a_closed_tab_is_not_counted_as_a_client() {
+        let dir = TestDir::new("closed-tab");
+        let a = dir.join("a.md");
+        fs::write(&a, "# A\n").unwrap();
+        let preview = start(&dir, &a);
+        let events = Events::connect(&preview);
+        drop(events); // The tab closes; the heartbeat is still seconds away.
+
+        // Open mode opens a new tab only for zero clients, so this must be
+        // exact right away rather than after the next failed heartbeat.
+        match open(&preview, &a, None) {
+            Reply::Ok { clients, .. } => assert_eq!(clients, 0),
+            reply => panic!("expected ok, got {reply:?}"),
+        }
     }
 
     #[test]

@@ -209,6 +209,10 @@ fn reuse_or_bind(file: &Path, args: &Args) -> Option<control::ControlSocket> {
             process::exit(1);
         }
         Err(control::SendError::NoServer) => {}
+        Err(err @ control::SendError::Unusable(_)) => {
+            eprintln!("mdpreview: {err}; running a standalone preview");
+            return None;
+        }
         Err(err) => {
             eprintln!("mdpreview: {err}");
             process::exit(1);
