@@ -148,6 +148,29 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
     })
 }
 
+/// Expand a leading `~`. Helix's `%{buffer_name}` is home-relative for files
+/// outside its working directory, and nothing expands that on the way here:
+/// the binding quotes it, so the shell leaves it alone, and `~` is an ordinary
+/// directory name to the OS.
+fn expand_tilde(file: &str) -> PathBuf {
+    let Some(rest) = file.strip_prefix('~') else {
+        return PathBuf::from(file);
+    };
+    // `~user` names someone else's home, which only the shell can resolve.
+    if !(rest.is_empty() || rest.starts_with('/')) {
+        return PathBuf::from(file);
+    }
+    match std::env::var_os("HOME").filter(|home| !home.is_empty()) {
+        Some(home) => {
+            let mut path = PathBuf::from(home);
+            // `rest` starts with `/`, and pushing that would discard the home.
+            path.push(rest.trim_start_matches('/'));
+            path
+        }
+        None => PathBuf::from(file),
+    }
+}
+
 /// Sync mode only acts on Markdown files; `C-s` runs it for every buffer.
 fn is_markdown(file: &str) -> bool {
     Path::new(file)
@@ -173,7 +196,7 @@ fn run_sync(args: &Args) {
     if !is_markdown(file) {
         return;
     }
-    let Ok(path) = Path::new(file).canonicalize() else {
+    let Ok(path) = expand_tilde(file).canonicalize() else {
         return;
     };
     let socket = control::default_socket_path();
@@ -275,7 +298,7 @@ fn run_restart(args: &Args) {
 
 fn run_open(args: &Args) {
     let file = args.file.as_deref().unwrap_or_default();
-    let file = Path::new(file).canonicalize().unwrap_or_else(|err| {
+    let file = expand_tilde(file).canonicalize().unwrap_or_else(|err| {
         eprintln!("mdpreview: cannot open {file}: {err}");
         process::exit(1);
     });
@@ -462,7 +485,8 @@ fn run_server(listener: TcpListener, file: PathBuf, config: server::Config) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Args, Mode, is_markdown, page_url, parse_args};
+    use super::{Args, Mode, expand_tilde, is_markdown, page_url, parse_args};
+    use std::path::PathBuf;
 
     fn parse(args: &[&str]) -> Result<Args, String> {
         parse_args(args.iter().map(|arg| arg.to_string()))
@@ -576,6 +600,31 @@ mod tests {
         }
         for no in ["main.rs", "[scratch]", "foo.md.bak", ".md", "Makefile", ""] {
             assert!(!is_markdown(no), "{no}");
+        }
+    }
+
+    #[test]
+    fn a_leading_tilde_becomes_the_home_directory() {
+        // SAFETY: single-threaded test, and the value is restored below.
+        let home = std::env::var_os("HOME");
+        unsafe { std::env::set_var("HOME", "/home/me") };
+
+        assert_eq!(
+            expand_tilde("~/notes/a.md"),
+            PathBuf::from("/home/me/notes/a.md")
+        );
+        assert_eq!(expand_tilde("~"), PathBuf::from("/home/me"));
+        // Only a leading `~` path segment counts.
+        assert_eq!(expand_tilde("~other/a.md"), PathBuf::from("~other/a.md"));
+        assert_eq!(expand_tilde("notes/~/a.md"), PathBuf::from("notes/~/a.md"));
+        assert_eq!(expand_tilde("/abs/a.md"), PathBuf::from("/abs/a.md"));
+        assert_eq!(expand_tilde("a.md"), PathBuf::from("a.md"));
+
+        unsafe {
+            match home {
+                Some(home) => std::env::set_var("HOME", home),
+                None => std::env::remove_var("HOME"),
+            }
         }
     }
 
