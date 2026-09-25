@@ -95,6 +95,14 @@ fn main() {
             run_quit();
             process::exit(0);
         }
+        // Refuse before restarting, so a stray keypress in a source file
+        // cannot take the preview server down with it.
+        Mode::Restart | Mode::Open if !is_markdown(args.file.as_deref().unwrap_or_default()) => {
+            fail(&format!(
+                "not a Markdown file: {}",
+                args.file.as_deref().unwrap_or_default()
+            ));
+        }
         Mode::Restart => run_restart(&args),
         Mode::Open => run_open(&args),
     }
@@ -171,7 +179,8 @@ fn expand_tilde(file: &str) -> PathBuf {
     }
 }
 
-/// Sync mode only acts on Markdown files; `C-s` runs it for every buffer.
+/// Every mode that takes a file only acts on Markdown: `C-s` and the preview
+/// bindings run for whatever buffer is open, including source files.
 fn is_markdown(file: &str) -> bool {
     Path::new(file)
         .extension()
@@ -261,7 +270,7 @@ fn run_quit() {
     report(match stop_server() {
         Stop::Stopped => "stopped the preview server",
         Stop::NoServer => "no preview server running",
-        Stop::Refused => REFUSED,
+        Stop::Refused => fail(REFUSED),
     });
 }
 
@@ -282,10 +291,7 @@ fn run_restart(args: &Args) {
         }
         // Opening would just hand the file to the server that refused, which
         // looks like the restart did nothing. Say so instead.
-        Stop::Refused => {
-            report(REFUSED);
-            return;
-        }
+        Stop::Refused => fail(REFUSED),
         Stop::NoServer => {}
     }
     run_open(args);
@@ -445,9 +451,18 @@ fn announce(url: &str, args: &Args) {
 const REFUSED: &str =
     "the running preview server is too old to quit; kill it by PID (ps | grep mdpreview)";
 
-/// Print a line only when stdout is a real terminal. When launched from an
-/// editor command (for example Helix's `:sh`), stdout is a pipe, so staying
-/// silent avoids a captured-output popup; the work happens regardless.
+/// Report a failure and stop. Unlike [`report`] this is never suppressed: an
+/// editor that runs `mdpreview` from a keybinding shows what a command wrote,
+/// and a refusal with no explanation looks like a broken binding.
+fn fail(message: &str) -> ! {
+    eprintln!("mdpreview: {message}");
+    process::exit(1);
+}
+
+/// Report success. Only when stdout is a real terminal: this is mostly the
+/// URL, and an editor that runs `mdpreview` from a keybinding captures output
+/// into a popup, which would then appear on every keypress. The work happens
+/// either way. Failures go through [`fail`] and are never suppressed.
 fn report(message: &str) {
     if std::io::stdout().is_terminal() {
         println!("{message}");
