@@ -68,8 +68,9 @@ impl fmt::Display for ProtocolError {
 /// Encode a request. Paths must be UTF-8 and free of tabs and newlines, which
 /// would break the line format.
 pub fn format_request(request: &Request) -> Result<String, ProtocolError> {
-    let Request::Open(open) = request else {
-        return Ok("quit\n".to_owned());
+    let open = match request {
+        Request::Open(open) => open,
+        Request::Quit => return Ok("quit\n".to_owned()),
     };
     let path = open
         .path

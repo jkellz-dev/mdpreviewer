@@ -5,10 +5,19 @@ on:
 permissions:
   contents: read
 jobs:
+  # The same checks CI runs. release-plz publishes whatever version is on
+  # main, so without this a commit that fails CI could still be released.
+  ci:
+    name: CI
+    permissions:
+      contents: read
+    # `$/` is the newer self-repository form, but actionlint rejects it.
+    uses: ./.github/workflows/ci.yml # zizmor: ignore[self-repository]
   # Publish to crates.io, tag, and create the GitHub release for any version
   # that landed on main but is not published yet.
   release:
     name: Release-plz release
+    needs: ci
     if: github.repository_owner == 'jkellz-dev'
     runs-on: ubuntu-latest
     permissions:

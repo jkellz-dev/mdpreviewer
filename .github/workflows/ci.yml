@@ -3,6 +3,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The release workflow runs this too, so nothing is published from a
+  # commit that fails it.
+  workflow_call:
 permissions: {}
 env:
   CARGO_TERM_COLOR: always
@@ -35,3 +38,17 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       - run: cargo test --all-targets
+  msrv:
+    name: Minimum supported Rust
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Keep in step with `rust-version` in Cargo.toml.
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: "1.88"
+      - run: cargo check --locked --all-targets
