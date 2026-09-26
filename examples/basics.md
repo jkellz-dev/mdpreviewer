@@ -10,6 +10,11 @@ Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor
 incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis
 nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
 
+## Relative Links
+
+- [mermaid diagrams](mermaid.md)
+- [bad link](foo.md)
+
 ## Inline Formatting
 
 Duis aute irure dolor in **reprehenderit** in _voluptate_ velit esse cillum

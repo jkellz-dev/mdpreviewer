@@ -150,7 +150,9 @@ fn main() {
         }
         // Refuse before restarting, so a stray keypress in a source file
         // cannot take the preview server down with it.
-        Mode::Restart | Mode::Open if !is_markdown(args.file.as_deref().unwrap_or_default()) => {
+        Mode::Restart | Mode::Open
+            if !render::is_markdown(Path::new(args.file.as_deref().unwrap_or_default())) =>
+        {
             fail(&format!(
                 "not a Markdown file: {}",
                 args.file.as_deref().unwrap_or_default()
@@ -232,15 +234,6 @@ fn expand_tilde(file: &str) -> PathBuf {
     }
 }
 
-/// Every mode that takes a file only acts on Markdown: `C-s` and the preview
-/// bindings run for whatever buffer is open, including source files.
-fn is_markdown(file: &str) -> bool {
-    Path::new(file)
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown"))
-}
-
 /// The URL to open in a browser. `#line=N` tells a freshly opened tab where to
 /// scroll, since it was not connected yet when the editor asked.
 fn page_url(url: &str, line: Option<u32>) -> String {
@@ -255,7 +248,7 @@ fn run_sync(args: &Args) {
     let Some(file) = &args.file else {
         return;
     };
-    if !is_markdown(file) {
+    if !render::is_markdown(Path::new(file)) {
         return;
     }
     let Ok(path) = expand_tilde(file).canonicalize() else {
@@ -553,9 +546,7 @@ fn run_server(listener: TcpListener, file: PathBuf, config: server::Config) {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        Args, EarlyExit, Mode, early_exit, expand_tilde, is_markdown, page_url, parse_args,
-    };
+    use super::{Args, EarlyExit, Mode, early_exit, expand_tilde, page_url, parse_args};
     use std::path::PathBuf;
 
     fn parse(args: &[&str]) -> Result<Args, String> {
@@ -716,16 +707,6 @@ mod tests {
             Stop::Refused
         );
         assert_eq!(classify(Err(SendError::Timeout)), Stop::Refused);
-    }
-
-    #[test]
-    fn only_markdown_files_are_synced() {
-        for yes in ["a.md", "docs/README.MD", "notes.markdown", "/abs/x.Md"] {
-            assert!(is_markdown(yes), "{yes}");
-        }
-        for no in ["main.rs", "[scratch]", "foo.md.bak", ".md", "Makefile", ""] {
-            assert!(!is_markdown(no), "{no}");
-        }
     }
 
     #[test]
