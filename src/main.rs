@@ -216,6 +216,12 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
 /// the binding quotes it, so the shell leaves it alone, and `~` is an ordinary
 /// directory name to the OS.
 fn expand_tilde(file: &str) -> PathBuf {
+    expand_home(file, std::env::var_os("HOME").as_deref())
+}
+
+/// [`expand_tilde`] against a given home directory, so tests need not touch
+/// the process environment.
+fn expand_home(file: &str, home: Option<&std::ffi::OsStr>) -> PathBuf {
     let Some(rest) = file.strip_prefix('~') else {
         return PathBuf::from(file);
     };
@@ -223,7 +229,7 @@ fn expand_tilde(file: &str) -> PathBuf {
     if !(rest.is_empty() || rest.starts_with('/')) {
         return PathBuf::from(file);
     }
-    match std::env::var_os("HOME").filter(|home| !home.is_empty()) {
+    match home.filter(|home| !home.is_empty()) {
         Some(home) => {
             let mut path = PathBuf::from(home);
             // `rest` starts with `/`, and pushing that would discard the home.
@@ -269,8 +275,6 @@ fn run_sync(args: &Args) {
 #[cfg(not(unix))]
 fn run_sync(_args: &Args) {}
 
-/// Ask a running server to exit. Returns whether one acknowledged.
-#[cfg(unix)]
 /// What asking the running server to quit did.
 #[cfg(unix)]
 #[derive(Debug, PartialEq, Eq)]
@@ -282,13 +286,16 @@ enum Stop {
     /// Something answered but would not quit. In practice that is a server
     /// from a build that predates `--quit`; it has to be killed by PID.
     Refused,
+    /// The socket directory failed its safety check, so no server could be
+    /// reached, or have bound there. Carries the reason.
+    Unusable(String),
 }
 
 #[cfg(unix)]
 fn stop_server() -> Stop {
     let socket = control::default_socket_path();
-    if control::ensure_socket_dir(&socket, control::current_uid()).is_err() {
-        return Stop::NoServer;
+    if let Err(err) = control::ensure_socket_dir(&socket, control::current_uid()) {
+        return Stop::Unusable(format!("control socket is unusable: {err}"));
     }
     classify(control::send(
         &socket,
@@ -317,6 +324,7 @@ fn run_quit() {
         Stop::Stopped => "stopped the preview server",
         Stop::NoServer => "no preview server running",
         Stop::Refused => fail(REFUSED),
+        Stop::Unusable(reason) => fail(&reason),
     });
 }
 
@@ -331,14 +339,22 @@ fn run_restart(args: &Args) {
         Stop::Stopped => {
             let socket = control::default_socket_path();
             let deadline = std::time::Instant::now() + RESTART_TIMEOUT;
-            while control::is_listening(&socket) && std::time::Instant::now() < deadline {
+            while control::is_listening(&socket) {
+                if std::time::Instant::now() >= deadline {
+                    // Opening now would hand the file to the old server.
+                    fail(
+                        "the running preview server did not exit; kill it by PID (ps | grep mdpreviewer)",
+                    );
+                }
                 std::thread::sleep(RESTART_STEP);
             }
         }
         // Opening would just hand the file to the server that refused, which
         // looks like the restart did nothing. Say so instead.
         Stop::Refused => fail(REFUSED),
-        Stop::NoServer => {}
+        // No server was reachable, so there is nothing to stop. Opening says
+        // why the socket is unusable and runs a standalone preview.
+        Stop::NoServer | Stop::Unusable(_) => {}
     }
     run_open(args);
 }
@@ -546,7 +562,8 @@ fn run_server(listener: TcpListener, file: PathBuf, config: server::Config) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Args, EarlyExit, Mode, early_exit, expand_tilde, page_url, parse_args};
+    use super::{Args, EarlyExit, Mode, early_exit, expand_home, page_url, parse_args};
+    use std::ffi::OsStr;
     use std::path::PathBuf;
 
     fn parse(args: &[&str]) -> Result<Args, String> {
@@ -711,27 +728,25 @@ mod tests {
 
     #[test]
     fn a_leading_tilde_becomes_the_home_directory() {
-        // SAFETY: single-threaded test, and the value is restored below.
-        let home = std::env::var_os("HOME");
-        unsafe { std::env::set_var("HOME", "/home/me") };
+        let home = Some(OsStr::new("/home/me"));
+        let expand = |file| expand_home(file, home);
 
-        assert_eq!(
-            expand_tilde("~/notes/a.md"),
-            PathBuf::from("/home/me/notes/a.md")
-        );
-        assert_eq!(expand_tilde("~"), PathBuf::from("/home/me"));
+        assert_eq!(expand("~/notes/a.md"), PathBuf::from("/home/me/notes/a.md"));
+        assert_eq!(expand("~"), PathBuf::from("/home/me"));
         // Only a leading `~` path segment counts.
-        assert_eq!(expand_tilde("~other/a.md"), PathBuf::from("~other/a.md"));
-        assert_eq!(expand_tilde("notes/~/a.md"), PathBuf::from("notes/~/a.md"));
-        assert_eq!(expand_tilde("/abs/a.md"), PathBuf::from("/abs/a.md"));
-        assert_eq!(expand_tilde("a.md"), PathBuf::from("a.md"));
+        assert_eq!(expand("~other/a.md"), PathBuf::from("~other/a.md"));
+        assert_eq!(expand("notes/~/a.md"), PathBuf::from("notes/~/a.md"));
+        assert_eq!(expand("/abs/a.md"), PathBuf::from("/abs/a.md"));
+        assert_eq!(expand("a.md"), PathBuf::from("a.md"));
+    }
 
-        unsafe {
-            match home {
-                Some(home) => std::env::set_var("HOME", home),
-                None => std::env::remove_var("HOME"),
-            }
-        }
+    #[test]
+    fn a_tilde_stays_put_without_a_home() {
+        assert_eq!(expand_home("~/a.md", None), PathBuf::from("~/a.md"));
+        assert_eq!(
+            expand_home("~/a.md", Some(OsStr::new(""))),
+            PathBuf::from("~/a.md")
+        );
     }
 
     #[test]

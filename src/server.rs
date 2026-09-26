@@ -93,9 +93,9 @@ pub struct Config {
     /// Where to accept `open` requests. `None` runs a standalone server.
     #[cfg(unix)]
     pub control: Option<control::ControlSocket>,
-    /// Whether a control `quit` ends the process. Always true in production;
-    /// the in-process integration tests set it false, for the same reason
-    /// they disable `idle_grace`.
+    /// Whether a control `quit` ends the process once it has removed the
+    /// socket. Always true in production; the in-process integration tests
+    /// set it false, for the same reason they disable `idle_grace`.
     #[cfg(unix)]
     pub exit_on_quit: bool,
 }
@@ -171,9 +171,9 @@ pub fn serve(server: Server, file: PathBuf, config: Config) {
                 listener,
                 move |open| handler_state.open(open, &url),
                 move || {
+                    let (path, inode) = &quit_socket;
+                    control::remove_socket_if_ours(path, *inode);
                     if exit_on_quit {
-                        let (path, inode) = &quit_socket;
-                        control::remove_socket_if_ours(path, *inode);
                         process::exit(0);
                     }
                 },
@@ -969,6 +969,26 @@ mod integration_tests {
         let mut reply = String::new();
         BufReader::new(stream).read_line(&mut reply).unwrap();
         assert!(reply.starts_with("err\t"), "{reply:?}");
+    }
+
+    #[test]
+    fn quit_removes_the_control_socket() {
+        let dir = TestDir::new("quit-server");
+        let a = dir.join("a.md");
+        fs::write(&a, "# A\n").unwrap();
+        let preview = start(&dir, &a);
+
+        assert_eq!(
+            control::send(&preview.socket, &Request::Quit, WAIT).unwrap(),
+            Reply::Bye
+        );
+        // The socket goes after `bye` is written, so give the listener a moment.
+        let deadline = std::time::Instant::now() + WAIT;
+        while preview.socket.exists() && std::time::Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!preview.socket.exists(), "quit left the socket behind");
+        assert!(!control::is_listening(&preview.socket));
     }
 
     /// Send an HTTP request with extra header lines and a body, and return the

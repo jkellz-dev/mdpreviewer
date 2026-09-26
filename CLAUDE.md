@@ -44,9 +44,10 @@ the repo is developed with Jujutsu, which does not run them.
 
 Releases are automated with [release-plz](https://release-plz.dev/): a push to `main` keeps a version-bump PR open, and
 merging it publishes to crates.io, tags, creates the GitHub release and attaches macOS arm64 and Linux x86_64 binaries.
-The binary job hangs off the release job rather than a `release: published` trigger, because a release created with
-`GITHUB_TOKEN` does not start new workflow runs. Actions are pinned to commit SHAs, with Dependabot bumping them on a 7
-day cooldown.
+The release job first runs `ci.yml` as a reusable workflow, so a commit that fails CI is never published, and CI also
+checks the MSRV (`rust-version`, 1.88). The binary job hangs off the release job rather than a `release: published`
+trigger, because a release created with `GITHUB_TOKEN` does not start new workflow runs. Actions are pinned to commit
+SHAs, with Dependabot bumping them on a 7 day cooldown.
 
 Standard `cargo build`, `cargo clippy`, `cargo fmt`, `cargo test` apply. Tests are inline `#[cfg(test)]` modules.
 `server.rs` has in-process integration tests (real server, temp socket, `idle_grace: None`). `src/testutil.rs` has
@@ -78,8 +79,8 @@ Request/reload flow across the five modules:
    rather than `report`, which is TTY-gated: Helix's `:sh` pops up whatever a command writes, so a silent refusal reads
    as a broken binding, while a TTY-gated success keeps the URL out of that popup. `--quit` sends `quit` and exits 0
    whether or not a server answered; `--restart` does that, polls `control::is_listening` (20 ms steps, 2 s cap) until
-   the old server has released the socket, then opens normally. On non-Unix platforms it runs in the foreground and
-   `--sync`, `--quit` and `--restart` are no-ops.
+   the old server has released the socket, then opens normally, or fails if it never does. On non-Unix platforms it runs
+   in the foreground and `--sync`, `--quit` and `--restart` are no-ops.
 2. **`control.rs`** (Unix) handles the socket:
    - Its path: `$XDG_RUNTIME_DIR/mdpreviewer.sock`, or a 0700 `mdpreviewer-<uid>` dir in the temp dir.
    - The one-line protocol: `open\t<path>\t<line>\n` → `ok\t<url>\t<clients>\n`, `quit\n` → `bye\n`, or
@@ -94,9 +95,9 @@ Request/reload flow across the five modules:
    (80ms), and sends `Event::Reload` on an mpsc channel.
 4. **`server.rs`** (tiny_http, one thread per request):
    - `serve(server, file, Config { url, idle_grace, control, exit_on_quit })` owns the event channel and the current
-     document: a `Current { path, watcher }` behind a mutex. `spawn_listener` also takes an `on_quit` callback: with
-     `Config::exit_on_quit` (off in tests) it removes the socket and exits the process. A control `open` for a different
-     file replaces it (dropping the old watch) and sends `Event::Reload`. A line sends `Event::Scroll(n)`.
+     document: a `Current { path, watcher }` behind a mutex. `spawn_listener` also takes an `on_quit` callback: it
+     removes the socket, and with `Config::exit_on_quit` (off in tests) exits the process. A control `open` for a
+     different file replaces it (dropping the old watch) and sends `Event::Reload`. A line sends `Event::Scroll(n)`.
    - A dispatcher thread fans each `Event` out to per-client `Sender`s, one per open `/events` SSE connection, as named
      events (`event: reload` / `event: scroll` + `data: <line>`).
    - `/events` bypasses tiny_http's buffered chunked writer (`request.into_writer()`) and writes raw SSE with a flush

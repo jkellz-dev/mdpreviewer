@@ -498,16 +498,34 @@ function resolveZoomTarget(node) {
   return node.closest?.(ZOOM_SELECTOR) ?? null;
 }
 
+// Code blocks and tables hold text, and a double-click there selects a word,
+// but its first click would already have opened the zoom. So they open only
+// once this long has passed without a second click.
+const DOUBLE_CLICK_MS = 300;
+let pendingZoom = null;
+
 content.addEventListener("click", (event) => {
+  // Any click cancels a zoom still waiting to see whether this is a
+  // double-click, including the second click of one.
+  clearTimeout(pendingZoom);
+  pendingZoom = null;
   // Leave modified clicks, links and text selection alone.
-  if (event.button !== 0 || event.defaultPrevented) return;
+  if (event.button !== 0 || event.defaultPrevented || event.detail > 1) return;
   if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
   const target = resolveZoomTarget(event.target);
   // Covers both a zoomable element inside a link and a link inside a
   // zoomable table or code block.
   if (!target || event.target.closest?.("a")) return;
   if (!(window.getSelection()?.isCollapsed ?? true)) return;
-  openZoom(target);
+  if (!target.matches("pre, table")) {
+    openZoom(target);
+    return;
+  }
+  pendingZoom = setTimeout(() => {
+    pendingZoom = null;
+    // A reload may have replaced the block in the meantime.
+    if (target.isConnected) openZoom(target);
+  }, DOUBLE_CLICK_MS);
 });
 
 overlay.querySelector(".mdpreviewer-zoom-close").addEventListener("click", closeZoom);
