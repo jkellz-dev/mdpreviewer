@@ -113,9 +113,52 @@ function requestScroll(line) {
   if (loading === 0) scrollToLine(line);
 }
 
+// A link or image source written relative to the document: no scheme, and not
+// starting with `/`, `#` or `?`. The page always lives at `/`, so the browser
+// would resolve these against the wrong directory; the server resolves them
+// against the document's own (see followLink and resolveImages).
+function isRelative(ref) {
+  return ref !== "" && !/^[a-z][a-z0-9+.-]*:/i.test(ref) && !/^[/#?]/.test(ref);
+}
+
+// Bumped on every `images` event and carried in each `/file` URL. A page
+// reuses an image it already has for a URL without asking the server, so a
+// replaced image needs a new URL to show. Between replacements the URL stays
+// the same, so a reload of the text does not refetch every image.
+let imageVersion = 0;
+
+function imageUrl(src) {
+  return `/file?path=${encodeURIComponent(src)}&v=${imageVersion}`;
+}
+
+// Point relative images at `/file`, which serves them from the document's
+// directory. This runs on the parsed fragment before it is inserted, so the
+// browser never requests the unresolved URL. The `src` as written is kept for
+// refreshImages.
+function resolveImages(fragment) {
+  for (const img of fragment.querySelectorAll("img[src]")) {
+    const src = img.getAttribute("src");
+    if (!isRelative(src)) continue;
+    img.dataset.mdpreviewerSrc = src;
+    img.setAttribute("src", imageUrl(src));
+  }
+}
+
+// An image the document shows was replaced on disk: fetch them all again
+// under a new URL. Only the images change, so the text does not flicker.
+async function refreshImages() {
+  imageVersion += 1;
+  const images = [...content.querySelectorAll("img[data-mdpreviewer-src]")];
+  for (const img of images) img.setAttribute("src", imageUrl(img.dataset.mdpreviewerSrc));
+  // An open zoom shows a clone, which is re-cloned once the new pixels are in
+  // so it is sized from them.
+  await Promise.allSettled(images.map((img) => img.decode()));
+  refreshZoom();
+}
+
 // Send links to other sites to a new tab, so following one does not navigate
-// the preview away from the document. Relative links stay in place; they are
-// same-origin and the server answers them.
+// the preview away from the document. Relative Markdown links are followed in
+// place by followLink.
 function retargetExternalLinks() {
   for (const link of content.querySelectorAll("a[href]")) {
     const url = new URL(link.href, location.href);
@@ -145,7 +188,10 @@ async function loadContent() {
     const name = response.headers.get("X-Mdpreviewer-File");
     if (name) document.title = `${decodeURIComponent(name)} — mdpreviewer`;
 
-    content.innerHTML = html;
+    const template = document.createElement("template");
+    template.innerHTML = html;
+    resolveImages(template.content);
+    content.replaceChildren(template.content);
     retargetExternalLinks();
 
     const blocks = collectMermaidBlocks();
@@ -183,6 +229,98 @@ function takeLineFromHash() {
 
 takeLineFromHash();
 document.addEventListener("DOMContentLoaded", loadContent);
+
+// How long a toast stays up before it fades out on its own.
+const TOAST_MS = 4000;
+
+const toast = document.createElement("div");
+toast.className = "mdpreviewer-toast";
+toast.setAttribute("role", "status");
+toast.hidden = true;
+document.body.append(toast);
+let toastTimer = null;
+
+// Show `message` briefly at the top of the window. A newer message replaces
+// an older one and restarts the timer; a click dismisses it early.
+function showToast(message) {
+  toast.textContent = message;
+  toast.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    toast.hidden = true;
+  }, TOAST_MS);
+}
+
+toast.addEventListener("click", () => {
+  clearTimeout(toastTimer);
+  toast.hidden = true;
+});
+
+// The link as the reader would name the file: percent escapes decoded, so
+// `my%20notes.md` reads as `my notes.md`.
+function linkLabel(path) {
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    return path;
+  }
+}
+
+// What to tell the reader when `/open` refuses a link: the server answers 404
+// for a file that is not there and 400 for one that is not Markdown.
+function openFailure(status, path) {
+  const name = linkLabel(path);
+  if (status === 404) return `No such file: ${name}`;
+  if (status === 400) return `Not a Markdown file: ${name}`;
+  return `Could not open ${name}`;
+}
+
+// Follow a relative link to another Markdown file by asking the server to
+// switch to it; the switch comes back to this tab as a `reload`.
+//
+// Modified and middle clicks are caught too. Left to the browser they would
+// open the link, resolved against `/`, in a new tab as a 404, and the server
+// shows one document to every tab, so a second tab could not show a different
+// file anyway. They switch this tab instead.
+async function followLink(event) {
+  // A left click of any kind arrives as `click`, a middle click as `auxclick`.
+  if (event.button > 1 || event.defaultPrevented) return;
+  const link = event.target.closest?.("a[href]");
+  if (!link) return;
+  const href = link.getAttribute("href");
+  if (!isRelative(href)) return;
+  const path = href.split(/[?#]/)[0];
+  if (!/\.(md|markdown)$/i.test(path)) return;
+  event.preventDefault();
+
+  // Start the new document at the top. Line 0 comes before every block, so
+  // scrolling to it goes to the top, and the reload picks it up like any
+  // recent scroll request.
+  const previous = pendingScroll;
+  pendingScroll = { line: 0, at: Date.now() };
+  let response;
+  try {
+    response = await fetch("/open", {
+      method: "POST",
+      headers: { "X-Mdpreviewer": "1" },
+      body: path,
+    });
+  } catch (err) {
+    // The server is gone (quit, or idled out behind a sleeping laptop).
+    pendingScroll = previous;
+    console.error(`mdpreviewer: could not open ${path}`, err);
+    showToast(openFailure(null, path));
+    return;
+  }
+  if (!response.ok) {
+    pendingScroll = previous;
+    console.error(`mdpreviewer: could not open ${path}: ${response.status}`);
+    showToast(openFailure(response.status, path));
+  }
+}
+
+content.addEventListener("click", followLink);
+content.addEventListener("auxclick", followLink);
 
 // ---------------------------------------------------------------------------
 // Zoom overlay
@@ -479,6 +617,7 @@ window.addEventListener("resize", () => {
 // Live updates. EventSource reconnects automatically if the connection drops.
 const events = new EventSource("/events");
 events.addEventListener("reload", () => loadContent());
+events.addEventListener("images", () => refreshImages());
 events.addEventListener("scroll", (event) => {
   const line = Number(event.data);
   if (Number.isInteger(line) && line > 0) requestScroll(line);

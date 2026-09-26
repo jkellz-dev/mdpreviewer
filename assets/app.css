@@ -125,6 +125,40 @@ pre.mermaid svg,
   color: #f0f6fc;
 }
 
+/* Toast: a short notice at the bottom of the window, such as a link to a file
+ * that is not there. Above the zoom overlay, so it shows over that too. */
+.mdpreviewer-toast {
+  position: fixed;
+  left: 50%;
+  top: 1.5rem;
+  z-index: 110;
+  transform: translateX(-50%);
+  max-width: calc(100vw - 2rem);
+  padding: 1rem 1.75rem;
+  color: #f0f6fc;
+  background: #161b22;
+  border: 2px solid #f85149;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(1, 4, 9, 0.6);
+  font-family: system-ui, sans-serif;
+  font-size: 18px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  animation: mdpreviewer-toast-in 0.15s ease-out;
+}
+
+.mdpreviewer-toast[hidden] {
+  display: none;
+}
+
+@keyframes mdpreviewer-toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -0.5rem);
+  }
+}
+
 /* Front matter: a muted, collapsed YAML block above the document body. */
 .markdown-body details.frontmatter {
   margin-bottom: 1.5rem;

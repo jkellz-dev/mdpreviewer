@@ -106,6 +106,16 @@ Request/reload flow across the five modules:
      `idle_grace: None` disables it for tests.
    - `/content` re-reads and re-renders the current file on every request, with no caching, and names it in
      `X-Mdpreviewer-File` (percent-encoded).
+   - The page always lives at `/`, so the browser cannot resolve a document's relative references itself; the server
+     resolves them against the current document's directory (`resolve_link`: percent-decode, refuse absolute paths,
+     canonicalize, require an existing file). `POST /open` (body: the link as written) follows a relative Markdown link
+     through the same `switch_to` a control `open` uses. It requires an `X-Mdpreviewer` header, which a browser will not
+     send cross-origin without a CORS preflight the server never grants, and rejects other methods.
+     `GET /file?path=<link>` serves relative images, image extensions only (checked on the canonical path, so a symlink
+     or `..` cannot reach other files), with `Content-Security-Policy: sandbox` so an SVG opened directly runs no
+     script. Each image served is recorded in `Current::images` and watched (`watch::watch_files`, one watch per
+     directory); replacing one sends `Event::Images`, an `images` SSE event. Switching documents drops that set with the
+     rest of `Current`.
 5. **`render.rs`** uses comrak with GFM extensions and `render.unsafe = true`, so raw HTML passes through; this is
    intentional for a local-only preview. Mermaid fences stay as `<pre><code class="language-mermaid">`. `---` front
    matter is parsed via comrak's `front_matter_delimiter`. comrak outputs nothing for that node, so `render.rs` prepends
@@ -114,7 +124,10 @@ Request/reload flow across the five modules:
 
 **Client (`assets/app.js`)**: on load and on every `reload` event, it:
 
-- Fetches `/content`, swaps it into `#content` and sets the title from `X-Mdpreviewer-File`.
+- Fetches `/content`, parses it into a `<template>`, rewrites relative `img` sources to `/file?path=…` (before
+  insertion, so the unresolved URL is never requested), swaps it into `#content` and sets the title from
+  `X-Mdpreviewer-File`. Image URLs carry `&v=<imageVersion>`: an `images` event bumps it and re-points every relative
+  image, because a page reuses an image it already holds for a URL even under `no-cache`.
 - Converts `code.language-mermaid` blocks to `<pre class="mermaid">`, keeping `data-sourcepos`, and awaits
   `mermaid.run`.
 - Then either restores the scroll position or re-applies a recent scroll request.
@@ -123,6 +136,13 @@ On `scroll` events and `#line=N`, `findBlock` picks the innermost block-level el
 (else the last one before it), centers it and flashes a `.mdpreviewer-target` outline. A scroll requested up to 1.5s
 before a load started is re-applied after that load renders, because a save sends `scroll` at once and `reload` ~80ms
 later. Mermaid rendering happens entirely in the browser.
+
+A plain click on a relative link to a `.md`/`.markdown` file is caught by `followLink`, which `POST`s the link to
+`/open` and lets the resulting `reload` render the new document, starting at the top (a pending scroll to line 0).
+If `/open` refuses (404 missing, 400 not Markdown) or the server is unreachable, `showToast` says so in a
+`.mdpreviewer-toast` at the top of the window for 4 s.
+Modified and middle clicks (`auxclick`) are caught too, since a new tab would be a 404 and the server shows one document
+to every tab anyway. Relative links to anything else are left to the browser.
 
 **Zoom overlay (`assets/app.js`, styles in `assets/app.css`)**: a delegated `click` on `#content` (so it survives the
 `innerHTML` swap) matches `ZOOM_SELECTOR` (`pre.mermaid svg, img, table, pre:not(.mermaid)`) and opens a full-window

@@ -8,14 +8,21 @@
 //!                               `X-Mdpreviewer-File` header carries the
 //!                               percent-encoded file name
 //!   GET /events                 Server-Sent Events: `reload` and `scroll`
+//!   POST /open                  follow a relative Markdown link: the body is
+//!                               the link as written, and the document it
+//!                               names becomes the current one
+//!   GET /file?path=<link>       an image the document refers to by a
+//!                               relative path
 //!   GET /assets/app.css         page styling
 //!   GET /assets/app.js          client (mermaid, live reload, scroll sync)
 //!   GET /assets/github-markdown.css   vendored GitHub markdown theme
 //!   GET /assets/mermaid.min.js        vendored mermaid.js
 
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::fs;
-use std::io::Write;
+use std::fs::File;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -25,7 +32,7 @@ use std::thread;
 use std::time::Duration;
 
 use notify::RecommendedWatcher;
-use tiny_http::{Header, Request, Response, Server};
+use tiny_http::{Header, Method, Request, Response, Server};
 
 #[cfg(unix)]
 use crate::control;
@@ -45,11 +52,21 @@ const SSE_HEARTBEAT: Duration = Duration::from_secs(10);
 /// loopback peer's reset to arrive.
 const PROBE_GAP: Duration = Duration::from_millis(25);
 
+/// The request header `POST /open` requires. A browser will not send a custom
+/// header cross-origin without a CORS preflight, which this server never
+/// grants, so another web page cannot switch the preview.
+const LINK_HEADER: &str = "X-Mdpreviewer";
+
+/// The longest link body `POST /open` reads.
+const MAX_LINK_BYTES: u64 = 4096;
+
 /// Something every open preview tab should hear about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Event {
     /// The current document changed on disk, or another document became current.
     Reload,
+    /// An image the current document shows changed on disk.
+    Images,
     /// Scroll to the block containing this 1-based source line.
     Scroll(u32),
     /// A heartbeat comment, sent now to find out which tabs have closed.
@@ -60,6 +77,7 @@ pub enum Event {
 fn sse_frame(event: Event) -> String {
     match event {
         Event::Reload => "event: reload\ndata:\n\n".to_owned(),
+        Event::Images => "event: images\ndata:\n\n".to_owned(),
         Event::Scroll(line) => format!("event: scroll\ndata: {line}\n\n"),
         Event::Ping => ": ping\n\n".to_owned(),
     }
@@ -86,11 +104,27 @@ pub struct Config {
 /// events out to all of them.
 type Clients = Arc<Mutex<Vec<Sender<Event>>>>;
 
-/// The document being previewed, and the watch that reloads it.
+/// The document being previewed, the watch that reloads it, and the images
+/// it has shown.
 struct Current {
     path: PathBuf,
     /// Held only to keep the watch alive; replacing it stops the old watch.
     _watcher: Option<RecommendedWatcher>,
+    /// Every image `/file` has served for this document, canonical. Replacing
+    /// one sends [`Event::Images`], through `image_watcher`.
+    images: BTreeSet<PathBuf>,
+    image_watcher: Option<RecommendedWatcher>,
+}
+
+impl Current {
+    fn new(path: PathBuf, events_tx: &Sender<Event>) -> Self {
+        Current {
+            _watcher: start_watch(&path, events_tx),
+            path,
+            images: BTreeSet::new(),
+            image_watcher: None,
+        }
+    }
 }
 
 /// Shared server state passed to each request handler thread.
@@ -110,12 +144,8 @@ struct State {
 /// Run the preview server until it shuts itself down (see [`spawn_monitor`]).
 pub fn serve(server: Server, file: PathBuf, config: Config) {
     let (events_tx, events_rx) = channel::<Event>();
-    let watcher = start_watch(&file, &events_tx);
     let state = State {
-        current: Arc::new(Mutex::new(Current {
-            path: file,
-            _watcher: watcher,
-        })),
+        current: Arc::new(Mutex::new(Current::new(file, &events_tx))),
         events_tx,
         clients: Arc::new(Mutex::new(Vec::new())),
         active: Arc::new(AtomicUsize::new(0)),
@@ -186,18 +216,7 @@ impl State {
             return control::Reply::Err(format!("not a file: {}", path.display()));
         }
         self.opened.store(true, Ordering::Relaxed);
-        {
-            let mut current = self.current.lock().unwrap();
-            if current.path != path {
-                let watcher = start_watch(&path, &self.events_tx);
-                // Replacing `Current` drops, and so stops, the previous watch.
-                *current = Current {
-                    path,
-                    _watcher: watcher,
-                };
-                let _ = self.events_tx.send(Event::Reload);
-            }
-        }
+        self.switch_to(path);
         if let Some(line) = line {
             let _ = self.events_tx.send(Event::Scroll(line));
         }
@@ -205,6 +224,41 @@ impl State {
             url: url.to_owned(),
             clients: self.live_clients(),
         }
+    }
+
+    /// Make `path` the current document, if it is not already, and tell every
+    /// tab to reload.
+    fn switch_to(&self, path: PathBuf) {
+        let mut current = self.current.lock().unwrap();
+        if current.path != path {
+            // Replacing `Current` drops, and so stops, the previous watches.
+            *current = Current::new(path, &self.events_tx);
+            let _ = self.events_tx.send(Event::Reload);
+        }
+    }
+
+    fn current_path(&self) -> PathBuf {
+        self.current.lock().unwrap().path.clone()
+    }
+
+    /// Watch `image`, which `/file` just served for `doc`, unless it is
+    /// already watched or `doc` stopped being current in the meantime. The
+    /// watch is rebuilt over the whole set: a document shows few images, and
+    /// one watch per directory is simpler than one per image.
+    fn watch_image(&self, doc: &Path, image: PathBuf) {
+        let mut current = self.current.lock().unwrap();
+        if current.path != doc || !current.images.insert(image) {
+            return;
+        }
+        let images: Vec<PathBuf> = current.images.iter().cloned().collect();
+        current.image_watcher =
+            match watch::watch_files(&images, Event::Images, self.events_tx.clone()) {
+                Ok(watcher) => Some(watcher),
+                Err(err) => {
+                    eprintln!("mdpreviewer: image watch failed: {err}");
+                    None
+                }
+            };
     }
 
     /// The number of connected tabs, after flushing out any that closed since
@@ -306,7 +360,8 @@ impl IdleClock {
 }
 
 fn handle(request: Request, state: &State) {
-    let path = request.url().split('?').next().unwrap_or("/");
+    let (path, query) = request.url().split_once('?').unwrap_or((request.url(), ""));
+    let query = query.to_owned();
     match path {
         "/" => respond(request, SHELL_HTML.as_bytes(), "text/html; charset=utf-8"),
         "/content" => serve_content(request, state),
@@ -319,11 +374,130 @@ fn handle(request: Request, state: &State) {
             "text/css; charset=utf-8",
         ),
         "/assets/mermaid.min.js" => respond(request, MERMAID_JS, "text/javascript; charset=utf-8"),
-        _ => {
-            let response = Response::from_data(&b"not found"[..]).with_status_code(404);
-            let _ = request.respond(response);
+        "/open" => follow_link(request, state),
+        "/file" => serve_file(request, state, &query),
+        _ => status(request, 404, "not found"),
+    }
+}
+
+/// `POST /open`: follow a relative link to another Markdown document. The
+/// page always lives at `/`, so the browser cannot resolve such a link
+/// itself; the client sends it as written and it is resolved here, against
+/// the current document's directory. The switch reaches every tab as a
+/// `reload`.
+fn follow_link(mut request: Request, state: &State) {
+    if *request.method() != Method::Post {
+        return status(request, 405, "use POST");
+    }
+    if !request.headers().iter().any(|h| h.field.equiv(LINK_HEADER)) {
+        return status(request, 403, "missing X-Mdpreviewer header");
+    }
+    let mut link = String::new();
+    let mut body = request.as_reader().take(MAX_LINK_BYTES);
+    if body.read_to_string(&mut link).is_err() {
+        return status(request, 400, "the link is not UTF-8");
+    }
+    let Some(path) = resolve_link(&state.current_path(), &link) else {
+        return status(request, 404, "no such file");
+    };
+    // Checked on the resolved path, so a `.md` symlink to something else is
+    // refused rather than rendered.
+    if !render::is_markdown(&path) {
+        return status(request, 400, "not a Markdown file");
+    }
+    state.switch_to(path);
+    let _ = request.respond(Response::empty(204));
+}
+
+/// `GET /file?path=<link>`: an image the document refers to by a relative
+/// path (the client rewrites each such `src` to this route). Only image types
+/// are served, checked on the resolved path, so a link cannot reach anything
+/// else the user can read. `sandbox` keeps an SVG opened on its own from
+/// running script on this origin.
+fn serve_file(request: Request, state: &State, query: &str) {
+    let link = query
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("path="))
+        .and_then(percent_decode);
+    let doc = state.current_path();
+    let served = link
+        .and_then(|link| resolve_link(&doc, &link))
+        .and_then(|path| Some((image_type(&path)?, File::open(&path).ok()?, path)));
+    let Some((content_type, file, path)) = served else {
+        return status(request, 404, "not found");
+    };
+    state.watch_image(&doc, path);
+    let response = Response::from_file(file)
+        .with_header(header("Content-Type", content_type))
+        .with_header(header("Content-Security-Policy", "sandbox"))
+        .with_header(header("X-Content-Type-Options", "nosniff"))
+        // Revalidate. The client also changes the URL when an image is
+        // replaced, since a page reuses an image it already has for a URL.
+        .with_header(header("Cache-Control", "no-cache"));
+    let _ = request.respond(response);
+}
+
+/// Resolve `link`, a relative reference as written in `doc` (so possibly
+/// percent-encoded), against `doc`'s directory. `None` unless it names an
+/// existing file. The result is canonical, so symlinks and `..` are resolved.
+fn resolve_link(doc: &Path, link: &str) -> Option<PathBuf> {
+    let link = percent_decode(link)?;
+    let relative = Path::new(&link);
+    if link.is_empty() || relative.has_root() {
+        return None;
+    }
+    let path = doc.parent()?.join(relative).canonicalize().ok()?;
+    path.is_file().then_some(path)
+}
+
+/// The content type to serve an image under, or `None` for anything that is
+/// not an image.
+fn image_type(path: &Path) -> Option<&'static str> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    Some(match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "svg" => "image/svg+xml",
+        "webp" => "image/webp",
+        "avif" => "image/avif",
+        "bmp" => "image/bmp",
+        "ico" => "image/x-icon",
+        _ => return None,
+    })
+}
+
+/// Decode `%XY` escapes. A `%` that starts no valid escape is kept as written;
+/// `None` if the result is not UTF-8.
+fn percent_decode(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let escaped = (bytes[i] == b'%')
+            .then(|| bytes.get(i + 1..i + 3))
+            .flatten()
+            // Checked first: `from_str_radix` would also take a leading `+`.
+            .filter(|hex| hex.iter().all(u8::is_ascii_hexdigit))
+            .and_then(|hex| u8::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok());
+        match escaped {
+            Some(byte) => {
+                out.push(byte);
+                i += 3;
+            }
+            None => {
+                out.push(bytes[i]);
+                i += 1;
+            }
         }
     }
+    String::from_utf8(out).ok()
+}
+
+/// Respond with a status code and a short plain-text reason.
+fn status(request: Request, code: u16, reason: &str) {
+    let response = Response::from_string(reason).with_status_code(code);
+    let _ = request.respond(response);
 }
 
 /// Render the current document, with its file name in `X-Mdpreviewer-File` for
@@ -439,9 +613,16 @@ impl Drop for ActiveGuard {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::fs;
+    use std::path::Path;
     use std::time::Duration;
 
-    use super::{Event, IdleClock, percent_encode, sse_frame};
+    use super::{
+        Event, IdleClock, image_type, percent_decode, percent_encode, resolve_link, sse_frame,
+    };
+    #[cfg(unix)]
+    use crate::testutil::TestDir;
 
     const STEP: Duration = Duration::from_secs(3);
 
@@ -479,12 +660,61 @@ mod tests {
     #[test]
     fn scroll_carries_the_line() {
         assert_eq!(sse_frame(Event::Scroll(42)), "event: scroll\ndata: 42\n\n");
+        assert_eq!(sse_frame(Event::Images), "event: images\ndata:\n\n");
     }
 
     #[test]
     fn file_names_are_percent_encoded_for_the_header() {
         assert_eq!(percent_encode("notes-2026_v1.md"), "notes-2026_v1.md");
         assert_eq!(percent_encode("café notes.md"), "caf%C3%A9%20notes.md");
+    }
+
+    #[test]
+    fn percent_decoding_undoes_the_encoding() {
+        assert_eq!(
+            percent_decode("caf%C3%A9%20notes.md").as_deref(),
+            Some("café notes.md")
+        );
+        assert_eq!(
+            percent_decode("..%2fimg%2Fa.png").as_deref(),
+            Some("../img/a.png")
+        );
+        // A `%` that starts no escape is kept as written.
+        assert_eq!(percent_decode("100%.md").as_deref(), Some("100%.md"));
+        assert_eq!(percent_decode("%zz").as_deref(), Some("%zz"));
+        assert_eq!(percent_decode("%+1").as_deref(), Some("%+1"));
+        // Bytes that are not UTF-8 have no path to name.
+        assert_eq!(percent_decode("%FF"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn links_resolve_against_the_document_directory() {
+        let dir = TestDir::new("resolve");
+        fs::create_dir_all(dir.join("docs")).unwrap();
+        let doc = dir.join("docs/a.md");
+        fs::write(&doc, "").unwrap();
+        fs::write(dir.join("b.md"), "").unwrap();
+
+        assert_eq!(resolve_link(&doc, "../b.md"), Some(dir.join("b.md")));
+        assert_eq!(resolve_link(&doc, "a.md"), Some(doc.clone()));
+        assert_eq!(resolve_link(&doc, "missing.md"), None);
+        assert_eq!(resolve_link(&doc, ""), None);
+        // A directory is not a document or an image.
+        assert_eq!(resolve_link(&doc, ".."), None);
+        // Only relative links; an absolute one is refused even if it exists.
+        let absolute = dir.join("b.md").display().to_string();
+        assert_eq!(resolve_link(&doc, &absolute), None);
+    }
+
+    #[test]
+    fn only_images_have_a_served_type() {
+        assert_eq!(image_type(Path::new("a/b.PNG")), Some("image/png"));
+        assert_eq!(image_type(Path::new("b.jpeg")), Some("image/jpeg"));
+        assert_eq!(image_type(Path::new("b.svg")), Some("image/svg+xml"));
+        for no in ["b.md", "id_rsa", "b.txt", "b.png.bak"] {
+            assert_eq!(image_type(Path::new(no)), None, "{no}");
+        }
     }
 }
 
@@ -739,5 +969,167 @@ mod integration_tests {
         let mut reply = String::new();
         BufReader::new(stream).read_line(&mut reply).unwrap();
         assert!(reply.starts_with("err\t"), "{reply:?}");
+    }
+
+    /// Send an HTTP request with extra header lines and a body, and return the
+    /// raw response.
+    fn request(preview: &Preview, method: &str, path: &str, headers: &str, body: &str) -> String {
+        let mut stream = TcpStream::connect(preview.http).unwrap();
+        stream.set_read_timeout(Some(WAIT)).unwrap();
+        write!(
+            stream,
+            "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\
+             {headers}Content-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).unwrap();
+        String::from_utf8_lossy(&response).into_owned()
+    }
+
+    /// Follow a link the way the client does.
+    fn follow(preview: &Preview, link: &str) -> String {
+        request(preview, "POST", "/open", "X-Mdpreviewer: 1\r\n", link)
+    }
+
+    fn status(response: &str) -> &str {
+        response.split(' ').nth(1).unwrap_or_default()
+    }
+
+    #[test]
+    fn a_relative_link_switches_the_document() {
+        let dir = TestDir::new("link");
+        fs::create_dir_all(dir.join("docs/sub")).unwrap();
+        let a = dir.join("docs/a.md");
+        fs::write(&a, "# A\n").unwrap();
+        fs::write(dir.join("README.md"), "# Readme\n").unwrap();
+        fs::write(dir.join("docs/sub/my notes.md"), "# Notes\n").unwrap();
+        let preview = start(&dir, &a);
+        let mut events = Events::connect(&preview);
+        events.settle();
+
+        // Resolved against the current document's directory, not the page's `/`.
+        assert_eq!(status(&follow(&preview, "../README.md")), "204");
+        assert_eq!(events.next(), "event: reload\ndata:\n\n");
+        let content = get(&preview, "/content");
+        assert!(
+            content
+                .to_ascii_lowercase()
+                .contains("x-mdpreviewer-file: readme.md"),
+            "{content}"
+        );
+
+        // Now relative to README.md's directory, and percent-encoded the way
+        // comrak writes an `href`.
+        assert_eq!(status(&follow(&preview, "docs/sub/my%20notes.md")), "204");
+        let content = get(&preview, "/content");
+        assert!(content.contains(">Notes</h1>"), "{content}");
+    }
+
+    #[test]
+    fn a_link_that_cannot_be_followed_is_refused() {
+        let dir = TestDir::new("bad-link");
+        let a = dir.join("a.md");
+        fs::write(&a, "# A\n").unwrap();
+        fs::write(dir.join("b.md"), "# B\n").unwrap();
+        fs::write(dir.join("notes.txt"), "text\n").unwrap();
+        let preview = start(&dir, &a);
+
+        assert_eq!(status(&follow(&preview, "gone.md")), "404");
+        assert_eq!(status(&follow(&preview, "notes.txt")), "400");
+        assert_eq!(
+            status(&follow(&preview, &dir.join("b.md").display().to_string())),
+            "404"
+        );
+        // Without the header, as a cross-site form post would arrive.
+        assert_eq!(
+            status(&request(&preview, "POST", "/open", "", "b.md")),
+            "403"
+        );
+        assert_eq!(status(&request(&preview, "GET", "/open", "", "")), "405");
+        // A CORS preflight gets no `Access-Control-Allow-*`, so it fails.
+        let preflight = request(&preview, "OPTIONS", "/open", "", "");
+        assert!(
+            !preflight
+                .to_ascii_lowercase()
+                .contains("access-control-allow"),
+            "{preflight}"
+        );
+
+        let content = get(&preview, "/content");
+        assert!(content.contains(">A</h1>"), "{content}");
+    }
+
+    #[test]
+    fn relative_images_are_served_from_the_document_directory() {
+        let dir = TestDir::new("image");
+        fs::create_dir_all(dir.join("docs")).unwrap();
+        fs::create_dir_all(dir.join("img")).unwrap();
+        let a = dir.join("docs/a.md");
+        fs::write(&a, "# A\n").unwrap();
+        fs::write(dir.join("img/dot.png"), b"not really a png").unwrap();
+        fs::write(dir.join("docs/secret.txt"), "secret\n").unwrap();
+        let preview = start(&dir, &a);
+
+        // The client sends the `src` as written, URL-encoded as a query value.
+        let image = get(&preview, "/file?path=..%2Fimg%2Fdot.png");
+        assert_eq!(status(&image), "200", "{image}");
+        let lower = image.to_ascii_lowercase();
+        assert!(lower.contains("content-type: image/png"), "{image}");
+        assert!(
+            lower.contains("content-security-policy: sandbox"),
+            "{image}"
+        );
+        assert!(image.ends_with("not really a png"), "{image}");
+
+        // Only images, and only files that exist.
+        assert_eq!(status(&get(&preview, "/file?path=secret.txt")), "404");
+        assert_eq!(status(&get(&preview, "/file?path=gone.png")), "404");
+        assert_eq!(status(&get(&preview, "/file")), "404");
+    }
+
+    #[test]
+    fn replacing_a_served_image_sends_an_images_event() {
+        let dir = TestDir::new("image-watch");
+        fs::create_dir_all(dir.join("img")).unwrap();
+        let a = dir.join("a.md");
+        fs::write(&a, "![](img/dot.png)\n").unwrap();
+        let png = dir.join("img/dot.png");
+        fs::write(&png, b"one").unwrap();
+        let preview = start(&dir, &a);
+        let mut events = Events::connect(&preview);
+
+        // Serving the image is what starts its watch.
+        assert_eq!(status(&get(&preview, "/file?path=img%2Fdot.png")), "200");
+        events.settle();
+
+        fs::write(&png, b"two").unwrap();
+        assert_eq!(events.next(), "event: images\ndata:\n\n");
+    }
+
+    #[test]
+    fn switching_documents_drops_the_image_watch() {
+        let dir = TestDir::new("image-switch");
+        let a = dir.join("a.md");
+        let b = dir.join("b.md");
+        fs::write(&a, "![](dot.png)\n").unwrap();
+        fs::write(&b, "# B\n").unwrap();
+        let png = dir.join("dot.png");
+        fs::write(&png, b"one").unwrap();
+        let preview = start(&dir, &a);
+        let mut events = Events::connect(&preview);
+        assert_eq!(status(&get(&preview, "/file?path=dot.png")), "200");
+
+        assert!(matches!(open(&preview, &b, None), Reply::Ok { .. }));
+        events.settle();
+
+        // b.md shows no image, so replacing a.md's is not news. A write to
+        // b.md afterwards gives the stream a frame to show next; the pause
+        // outlasts the debounce, so a stray `images` would come first.
+        fs::write(&png, b"two").unwrap();
+        thread::sleep(Duration::from_millis(300));
+        fs::write(&b, "# B changed\n").unwrap();
+        assert_eq!(events.next(), "event: reload\ndata:\n\n");
     }
 }

@@ -88,6 +88,20 @@ selecting text does not zoom. The overlay follows live reloads: saving the
 file re-renders what it is showing and keeps your zoom, and it closes if the
 block is gone.
 
+### Relative links and images
+
+The preview follows the document's relative references the way GitHub does.
+Clicking a link to another Markdown file, such as `[setup](docs/setup.md)` or
+`[back](../README.md)`, switches the preview to that file, and relative images
+such as `![](img/diagram.png)` load from beside the document and reload when
+the image file is replaced. A link to a file
+that is missing, or is not Markdown, shows a notice at the top of the window
+instead. The preview shows one document at a time, so a ctrl- or middle-click
+on such a link switches the preview too, rather than opening a new tab. Only
+image files are served that way, and relative links to anything
+other than Markdown are left to the browser. Saving in the editor switches the preview back to the
+file being edited, since `C-s` tells the server which file that is.
+
 ### Helix
 
 Helix has no plugin system, so the preview is an ordinary command bound to a
@@ -224,7 +238,8 @@ Override versions via `MERMAID_VERSION` / `GH_MD_CSS_VERSION`.
   atomic-rename saves) and emits debounced reload events.
 - `server.rs` serves the shell page, the rendered fragment (`/content`), an SSE
   stream of `reload` and `scroll` events (`/events`), and the embedded assets.
-  It switches documents when asked over the control socket.
+  It switches documents when asked over the control socket or when a relative
+  Markdown link is clicked (`/open`), and serves relative images (`/file`).
 - `assets/app.js` renders the fragment, turns mermaid fences into diagrams,
   reloads on SSE events, scrolls to the cursor line, and provides the
   click-to-zoom overlay.

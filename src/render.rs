@@ -7,6 +7,17 @@
 use comrak::html::escape;
 use comrak::nodes::{NodeValue, Sourcepos};
 use comrak::{Arena, Options, format_html, parse_document};
+use std::path::Path;
+
+/// Whether `path` names a Markdown file, by extension. Every CLI mode that
+/// takes a file only acts on Markdown, because `C-s` and the preview bindings
+/// run for whatever buffer is open, including source files. The server uses
+/// it to decide which relative links it will follow.
+pub fn is_markdown(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown"))
+}
 
 /// Render a markdown document to an HTML fragment suitable for insertion into
 /// the preview shell's `#content` element.
@@ -70,7 +81,19 @@ fn render_front_matter(raw: &str, sourcepos: Sourcepos, html: &mut String) {
 
 #[cfg(test)]
 mod tests {
-    use super::render_markdown;
+    use std::path::Path;
+
+    use super::{is_markdown, render_markdown};
+
+    #[test]
+    fn only_markdown_files_are_synced() {
+        for yes in ["a.md", "docs/README.MD", "notes.markdown", "/abs/x.Md"] {
+            assert!(is_markdown(Path::new(yes)), "{yes}");
+        }
+        for no in ["main.rs", "[scratch]", "foo.md.bak", ".md", "Makefile", ""] {
+            assert!(!is_markdown(Path::new(no)), "{no}");
+        }
+    }
 
     #[test]
     fn front_matter_renders_as_collapsed_yaml_block() {
