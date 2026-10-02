@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3](https://github.com/jkellz-dev/mdpreviewer/compare/v0.1.2...v0.1.3) - 2026-10-02
+
+### Added
+
+- *(typst)* scroll to, zoom and style pages
+- *(typst)* reload when a file the document reads changes
+- *(typst)* preview Typst documents
+- *(typst)* tag where each source line lands on its page
+- *(typst)* compile documents to SVG pages
+- follow relative Markdown links and load relative images
+
+### Documentation
+
+- *(typst)* document the preview and add an example
+
+### Fixed
+
+- *(watch)* ignore events for files that have not changed since the watch began
+- *(typst)* close gaps from the review
+- close gaps from the review of the control-socket work
+
 ## [0.1.2](https://github.com/jkellz-dev/mdpreviewer/compare/v0.1.1...v0.1.2) - 2026-09-25
 
 ### Documentation
