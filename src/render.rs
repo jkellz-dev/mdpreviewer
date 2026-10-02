@@ -1,4 +1,4 @@
-//! Markdown to HTML rendering.
+//! Markdown to HTML rendering, and which files are documents at all.
 //!
 //! Fenced ```mermaid blocks are left as ordinary code blocks
 //! (`<pre><code class="language-mermaid">`) and turned into diagrams by the
@@ -9,14 +9,25 @@ use comrak::nodes::{NodeValue, Sourcepos};
 use comrak::{Arena, Options, format_html, parse_document};
 use std::path::Path;
 
-/// Whether `path` names a Markdown file, by extension. Every CLI mode that
-/// takes a file only acts on Markdown, because `C-s` and the preview bindings
-/// run for whatever buffer is open, including source files. The server uses
-/// it to decide which relative links it will follow.
-pub fn is_markdown(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown"))
+/// The kinds of document the preview renders.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Markdown,
+    Typst,
+}
+
+/// What kind of document `path` names, by extension, or `None` for anything
+/// the preview does not render. Every CLI mode that takes a file only acts on
+/// these, because `C-s` and the preview bindings run for whatever buffer is
+/// open, including source files. The server uses it to pick a renderer and to
+/// decide which relative links it will follow.
+pub fn kind(path: &Path) -> Option<Kind> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    match ext.as_str() {
+        "md" | "markdown" => Some(Kind::Markdown),
+        "typ" => Some(Kind::Typst),
+        _ => None,
+    }
 }
 
 /// Render a markdown document to an HTML fragment suitable for insertion into
@@ -83,15 +94,30 @@ fn render_front_matter(raw: &str, sourcepos: Sourcepos, html: &mut String) {
 mod tests {
     use std::path::Path;
 
-    use super::{is_markdown, render_markdown};
+    use super::{Kind, kind, render_markdown};
 
     #[test]
-    fn only_markdown_files_are_synced() {
-        for yes in ["a.md", "docs/README.MD", "notes.markdown", "/abs/x.Md"] {
-            assert!(is_markdown(Path::new(yes)), "{yes}");
+    fn documents_are_recognised_by_extension() {
+        for markdown in ["a.md", "docs/README.MD", "notes.markdown", "/abs/x.Md"] {
+            assert_eq!(
+                kind(Path::new(markdown)),
+                Some(Kind::Markdown),
+                "{markdown}"
+            );
         }
-        for no in ["main.rs", "[scratch]", "foo.md.bak", ".md", "Makefile", ""] {
-            assert!(!is_markdown(Path::new(no)), "{no}");
+        for typst in ["thesis.typ", "/abs/Notes.TYP"] {
+            assert_eq!(kind(Path::new(typst)), Some(Kind::Typst), "{typst}");
+        }
+        for other in [
+            "main.rs",
+            "[scratch]",
+            "foo.md.bak",
+            ".md",
+            ".typ",
+            "Makefile",
+            "",
+        ] {
+            assert_eq!(kind(Path::new(other)), None, "{other}");
         }
     }
 

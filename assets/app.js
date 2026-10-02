@@ -157,8 +157,8 @@ async function refreshImages() {
 }
 
 // Send links to other sites to a new tab, so following one does not navigate
-// the preview away from the document. Relative Markdown links are followed in
-// place by followLink.
+// the preview away from the document. Relative links to documents are
+// followed in place by followLink.
 function retargetExternalLinks() {
   for (const link of content.querySelectorAll("a[href]")) {
     const url = new URL(link.href, location.href);
@@ -267,15 +267,16 @@ function linkLabel(path) {
 }
 
 // What to tell the reader when `/open` refuses a link: the server answers 404
-// for a file that is not there and 400 for one that is not Markdown.
+// for a file that is not there and 400 for one that is neither Markdown nor
+// Typst.
 function openFailure(status, path) {
   const name = linkLabel(path);
   if (status === 404) return `No such file: ${name}`;
-  if (status === 400) return `Not a Markdown file: ${name}`;
+  if (status === 400) return `Not a Markdown or Typst file: ${name}`;
   return `Could not open ${name}`;
 }
 
-// Follow a relative link to another Markdown file by asking the server to
+// Follow a relative link to another document by asking the server to
 // switch to it; the switch comes back to this tab as a `reload`.
 //
 // Modified and middle clicks are caught too. Left to the browser they would
@@ -290,7 +291,7 @@ async function followLink(event) {
   const href = link.getAttribute("href");
   if (!isRelative(href)) return;
   const path = href.split(/[?#]/)[0];
-  if (!/\.(md|markdown)$/i.test(path)) return;
+  if (!/\.(md|markdown|typ)$/i.test(path)) return;
   event.preventDefault();
 
   // Start the new document at the top. Line 0 comes before every block, so
