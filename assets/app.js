@@ -19,7 +19,9 @@ const content = document.getElementById("content");
 const PENDING_SCROLL_MS = 1500;
 
 // Elements that make good scroll targets. comrak also puts data-sourcepos on
-// inline elements (em, code, a, ...); those are ignored.
+// inline elements (em, code, a, ...); those are ignored. A Typst page is not a
+// target: its range spans every line on it, so a line with no marker of its
+// own would match the whole page instead of the nearest marker before it.
 const BLOCK_SELECTOR = [
   "h1",
   "h2",
@@ -40,6 +42,7 @@ const BLOCK_SELECTOR = [
   "section",
 ]
   .map((tag) => `${tag}[data-sourcepos]`)
+  .concat(["div.typst-line[data-sourcepos]", "div.typst-errors[data-sourcepos]"])
   .join(",");
 
 // The latest scroll request from the editor: { line, at }.
@@ -329,7 +332,7 @@ content.addEventListener("auxclick", followLink);
 
 // What a click can blow up. A mermaid diagram is matched by its <svg> rather
 // than the <pre> so the clone scales losslessly.
-const ZOOM_SELECTOR = "pre.mermaid svg, img, table, pre:not(.mermaid)";
+const ZOOM_SELECTOR = "pre.mermaid svg, .typst-page > svg, img, table, pre:not(.mermaid)";
 
 const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 30;
