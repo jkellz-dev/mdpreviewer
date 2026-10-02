@@ -13,6 +13,7 @@ typstyle = "latest"
 shfmt = "latest"
 shellcheck = "latest"
 pkl = "latest"
+pinact = "latest"
 
 [tasks.build]
 description = "Build the release binary"

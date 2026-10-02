@@ -203,7 +203,8 @@ mise run format  # hk check --fix --all (alias: fix)
 
 `hk.pkl` lists the steps: rustfmt and clippy for Rust, oxfmt for the browser
 JavaScript, CSS and HTML, typstyle for Typst, shfmt and shellcheck for shell
-scripts, yamlfmt and actionlint and zizmor for the workflows, taplo for TOML,
+scripts, yamlfmt and actionlint and zizmor for the workflows, pinact to pin the
+workflows' actions to commit SHAs, taplo for TOML,
 `pkl format` for `hk.pkl` itself, and rumdl for Markdown. Shell indentation
 comes from `.editorconfig`. `examples/` is excluded from Markdown formatting because
 those files are fixtures whose odd formatting is the point, and

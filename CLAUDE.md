@@ -38,13 +38,13 @@ mise run release:check  # lint, test, and package the crate, as CI would
 
 Linting and formatting go through [hk](https://hk.jdx.dev/) (`hk.pkl`), not ad-hoc tool invocations: rustfmt, clippy,
 oxfmt for the browser assets (JS, CSS, HTML), typstyle for Typst, shfmt and shellcheck for shell, yamlfmt, actionlint
-and zizmor for the workflows, taplo for TOML, `pkl format` for `hk.pkl`, rumdl for Markdown. Shell indentation comes
-from `.editorconfig`. In CI the lint job runs `rustup toolchain install` first, because hk starts the cargo steps in
-parallel and two first-use toolchain installs race.
-`assets/vendor/` is excluded everywhere and `examples/` and `docs/superpowers/` are excluded from Markdown rules. Every
-tool is pinned in `.config/mise/config.toml` except Rust, which `rust-toolchain.toml` pins for rustup, mise and CI
-alike, and CI runs the same `mise run lint`. Git hooks are pointless here because the repo is developed with Jujutsu,
-which does not run them.
+and zizmor for the workflows, pinact to pin actions to commit SHAs (`mise run format` pins an action written by tag),
+taplo for TOML, `pkl format` for `hk.pkl`, rumdl for Markdown. Shell indentation comes from `.editorconfig`. In CI the
+lint job runs `rustup toolchain install` first, because hk starts the cargo steps in parallel and two first-use
+toolchain installs race. `assets/vendor/` is excluded everywhere and `examples/` and `docs/superpowers/` are excluded
+from Markdown rules. Every tool is pinned in `.config/mise/config.toml` except Rust, which `rust-toolchain.toml` pins
+for rustup, mise and CI alike, and CI runs the same `mise run lint`. Git hooks are pointless here because the repo is
+developed with Jujutsu, which does not run them.
 
 Releases are automated with [release-plz](https://release-plz.dev/): a push to `main` keeps a version-bump PR open, and
 merging it publishes to crates.io, tags, creates the GitHub release and attaches macOS arm64 and Linux x86_64 binaries.
