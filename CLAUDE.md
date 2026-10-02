@@ -57,11 +57,13 @@ Standard `cargo build`, `cargo clippy`, `cargo fmt`, `cargo test` apply. Tests a
 capped at 104 bytes, and macOS's `TMPDIR` under `/var/folders` overflows that, so it falls back to `/tmp`. Run one with
 `cargo test <name_substring>`.
 
-To try a change manually: `cargo run -- examples/<file>.md`. `examples/` holds fixed lorem ipsum fixtures: `basics.md`
+To try a change manually: `cargo run -- examples/<file>`. `examples/` holds fixed lorem ipsum fixtures: `basics.md`
 (GFM, front matter, raw HTML, and two data-URI SVG images (one plain, one linked, to cover the zoom overlay's link
 guard)), `mermaid.md` (one of each diagram type plus a deliberately invalid one) and `front-matter.md` (escaping and
-edge cases), plus `typst.typ` (pages, math, a table, a figure from `typst-figure.svg`, and an `#include` of
-`typst-chapter.typ`). On Unix the process forks and the parent exits immediately, so the server runs detached in the
+edge cases), plus the Typst fixtures: `typst.typ` (pages, math, a table, a figure from `typst-figure.svg`, and an
+`#include` of `typst-chapter.typ`), `typst-math.typ`, `typst-layout.typ` (mixed page sizes, columns, footnotes, a
+float), `typst-package.typ` (a `@preview` import, downloaded on first use), `typst-warnings.typ`, and `typst-error.typ`
+(deliberately broken). On Unix the process forks and the parent exits immediately, so the server runs detached in the
 background. It prints the URL only when stdout is a TTY, and exits on its own ~15s after the last browser tab closes.
 Use `--no-open` to get the URL without opening a tab, and a scratch `XDG_RUNTIME_DIR` to avoid reusing your real server.
 Kill test servers by PID (`ss -xlpn | grep mdpreviewer.sock` shows it).
