@@ -1,0 +1,6 @@
+root = true
+
+# shfmt reads this; without it, it indents with tabs.
+[*.sh]
+indent_style = space
+indent_size = 2

@@ -13,20 +13,24 @@ As @gauss shows, consectetur adipiscing elit.
 = Alignment
 
 $
-  (a + b)^2 &= (a + b)(a + b) \
-            &= a^2 + a b + b a + b^2 \
-            &= a^2 + 2 a b + b^2
+  (a + b)^2 & = (a + b)(a + b) \
+            & = a^2 + a b + b a + b^2 \
+            & = a^2 + 2 a b + b^2
 $
 
 = Matrices and cases
 
-$ A = mat(1, 2, 3; 4, 5, 6; 7, 8, 9), quad
-  det(A) = 0 $
+$
+  A = mat(1, 2, 3; 4, 5, 6; 7, 8, 9), quad
+  det(A) = 0
+$
 
-$ f(x) = cases(
-  x^2 & "if" x >= 0,
-  -x  & "otherwise",
-) $
+$
+  f(x) = cases(
+    x^2 & "if" x >= 0,
+    -x & "otherwise",
+  )
+$
 
 = Sums, limits and fractions
 
