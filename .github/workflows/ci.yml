@@ -26,6 +26,13 @@ jobs:
       # steps in parallel: two cargo steps that each trigger rustup's
       # first-use install race on the same download.
       - run: rustup toolchain install
+      # Reuse compiled dependencies between runs. Only main writes the cache;
+      # pull requests read main's, so they cannot fill the quota or poison
+      # what main builds with. It keys on the rustc version, so it follows
+      # the toolchain install.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: mise run lint
   test:
     name: Test (${{ matrix.os }})
@@ -43,4 +50,12 @@ jobs:
       # rustup, preinstalled on the runners, installs the toolchain that
       # rust-toolchain.toml pins. It equals `rust-version`, so this run is
       # also the minimum-supported-Rust check.
+      - run: rustup toolchain install
+      # Reuse compiled dependencies between runs. Only main writes the cache;
+      # pull requests read main's, so they cannot fill the quota or poison
+      # what main builds with. It keys on the rustc version, so it follows
+      # the toolchain install.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo test --locked --all-targets
