@@ -77,6 +77,9 @@ impl Session {
         self.world.files.reset();
         self.world.time.reset();
         let Warned { output, warnings } = typst::compile::<PagedDocument>(&self.world);
+        // Drop memoized results that the last few compiles did not reuse, as
+        // `typst watch` does. The cache is global and otherwise only grows.
+        typst::comemo::evict(10);
 
         let mut html = String::new();
         match output {

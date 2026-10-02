@@ -75,15 +75,23 @@ function sourceLines(el) {
 }
 
 // The block for a 1-based source line: the innermost block containing it,
-// else the last block starting before it (blank lines, raw HTML), else null.
+// else the block starting nearest before it (blank lines, raw HTML), else
+// null. Nearest by line, not by position in the page: a Typst page repeats
+// its header and page number, tagged with the line that set them up, on every
+// page, so the last such block in the page can come from a much earlier line.
 function findBlock(line) {
   let innermost = null;
   let innermostSpan = Infinity;
   let before = null;
+  let beforeStart = -Infinity;
   for (const el of content.querySelectorAll(BLOCK_SELECTOR)) {
     const lines = sourceLines(el);
     if (!lines) continue;
-    if (lines.start <= line) before = el;
+    // `>=` so that on a tie the later element wins, as below.
+    if (lines.start <= line && lines.start >= beforeStart) {
+      before = el;
+      beforeStart = lines.start;
+    }
     const span = lines.end - lines.start;
     // `<=` so that on a tie the later, more deeply nested element wins.
     if (lines.start <= line && line <= lines.end && span <= innermostSpan) {
@@ -161,14 +169,16 @@ async function refreshImages() {
 
 // Send links to other sites to a new tab, so following one does not navigate
 // the preview away from the document. Relative links to documents are
-// followed in place by followLink.
+// followed in place by followLink. Attributes rather than properties, because
+// a link in a Typst page is an SVG <a>, whose `href` is not a string and which
+// has no `target` property.
 function retargetExternalLinks() {
   for (const link of content.querySelectorAll("a[href]")) {
-    const url = new URL(link.href, location.href);
+    const url = new URL(link.getAttribute("href"), location.href);
     const web = url.protocol === "http:" || url.protocol === "https:";
     if (web && url.origin !== location.origin) {
-      link.target = "_blank";
-      link.rel = "noopener noreferrer";
+      link.setAttribute("target", "_blank");
+      link.setAttribute("rel", "noopener noreferrer");
     }
   }
 }
@@ -362,9 +372,12 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
-// The source position identifying `el` across reloads: its own, else that of
-// the nearest block that has one.
+// What identifies `el` across reloads. A Typst page goes by its number: pages
+// can share a line range (a header repeats on every page) or have none. Anything
+// else goes by its source position, else that of the nearest block that has one.
 function zoomKey(el) {
+  const page = el.closest(".typst-page");
+  if (page) return `page:${[...content.querySelectorAll(".typst-page")].indexOf(page)}`;
   const anchor = el.closest("[data-sourcepos]");
   return anchor ? anchor.dataset.sourcepos : null;
 }
