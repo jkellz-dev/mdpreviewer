@@ -5,6 +5,7 @@
 
 use std::any::Any;
 use std::io::{self, Read};
+use std::time::Duration;
 
 use typst_kit::downloader::Downloader;
 use ureq::tls::{RootCerts, TlsConfig};
@@ -15,17 +16,35 @@ use ureq::tls::{RootCerts, TlsConfig};
 /// usual environment variables.
 pub struct HttpsDownloader(ureq::Agent);
 
-impl Default for HttpsDownloader {
-    fn default() -> Self {
+/// How long one download may take in all. A compile waits on its downloads
+/// while holding the document's session, so without a limit a stalled
+/// connection would freeze the preview; with one it fails the compile, and
+/// the next save tries again. Generous, because a package can be several
+/// megabytes on a slow link.
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// How long to wait for a connection, TLS handshake included.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+impl HttpsDownloader {
+    fn with_timeout(total: Duration) -> Self {
         let tls = TlsConfig::builder()
             .root_certs(RootCerts::PlatformVerifier)
             .build();
         let agent = ureq::Agent::config_builder()
             .tls_config(tls)
             .user_agent(concat!("mdpreviewer/", env!("CARGO_PKG_VERSION")))
+            .timeout_connect(Some(CONNECT_TIMEOUT.min(total)))
+            .timeout_global(Some(total))
             .build()
             .new_agent();
         HttpsDownloader(agent)
+    }
+}
+
+impl Default for HttpsDownloader {
+    fn default() -> Self {
+        Self::with_timeout(DOWNLOAD_TIMEOUT)
     }
 }
 
@@ -48,7 +67,10 @@ impl Downloader for HttpsDownloader {
 #[cfg(test)]
 mod tests {
     use std::io::{ErrorKind, Read};
+    use std::net::TcpListener;
+    use std::sync::mpsc;
     use std::thread;
+    use std::time::Duration;
 
     use tiny_http::{Response, Server};
     use typst_kit::downloader::Downloader;
@@ -93,6 +115,25 @@ mod tests {
             .err()
             .unwrap();
         assert_eq!(err.kind(), ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn a_stalled_download_times_out() {
+        // Accepts the connection, then never answers.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/stall", listener.local_addr().unwrap());
+        thread::spawn(move || {
+            let (_stream, _) = listener.accept().unwrap();
+            thread::sleep(Duration::from_secs(30));
+        });
+
+        let (done_tx, done_rx) = mpsc::channel();
+        thread::spawn(move || {
+            let result =
+                HttpsDownloader::with_timeout(Duration::from_millis(300)).stream(&(), &url);
+            let _ = done_tx.send(result.is_err());
+        });
+        assert_eq!(done_rx.recv_timeout(Duration::from_secs(5)), Ok(true));
     }
 
     #[test]

@@ -117,8 +117,9 @@ struct Current {
     /// Shared so that `/content` compiles without holding the `current` lock.
     /// The session's own lock keeps two tabs from compiling at once.
     typst: Option<Arc<Mutex<typeset::Session>>>,
-    /// The files the last Typst compile read besides the document itself.
-    /// Changing one sends [`Event::Reload`], through `dependency_watcher`.
+    /// The files the last Typst compile read besides the document itself,
+    /// those that can be watched. Changing one sends [`Event::Reload`],
+    /// through `dependency_watcher`.
     dependencies: Vec<PathBuf>,
     dependency_watcher: Option<RecommendedWatcher>,
 }
@@ -276,17 +277,18 @@ impl State {
     /// Watch the files the last compile of `doc` read, unless the set is
     /// unchanged or `doc` stopped being current in the meantime. A file in a
     /// directory that does not exist (an include not written yet) is left
-    /// out, because one unwatchable path would fail the whole watch.
+    /// out, because one unwatchable path would fail the whole watch. The set
+    /// compared is the watchable one, so a render after that directory
+    /// appears starts watching the file.
     fn watch_dependencies(&self, doc: &Path, dependencies: Vec<PathBuf>) {
+        let watchable: Vec<PathBuf> = dependencies
+            .into_iter()
+            .filter(|path| path.parent().is_some_and(Path::is_dir))
+            .collect();
         let mut current = self.current.lock().unwrap();
-        if current.path != doc || current.dependencies == dependencies {
+        if current.path != doc || current.dependencies == watchable {
             return;
         }
-        let watchable: Vec<PathBuf> = dependencies
-            .iter()
-            .filter(|path| path.parent().is_some_and(Path::is_dir))
-            .cloned()
-            .collect();
         current.dependency_watcher = if watchable.is_empty() {
             None
         } else {
@@ -298,7 +300,7 @@ impl State {
                 }
             }
         };
-        current.dependencies = dependencies;
+        current.dependencies = watchable;
     }
 
     /// The number of connected tabs, after flushing out any that closed since
@@ -1223,6 +1225,27 @@ mod integration_tests {
         events.settle();
 
         fs::write(&chapter, "two\n").unwrap();
+        assert_eq!(events.next(), "event: reload\ndata:\n\n");
+    }
+
+    #[test]
+    fn an_include_whose_directory_appears_later_is_watched() {
+        let dir = TestDir::new("typst-dep-later");
+        let doc = dir.join("main.typ");
+        fs::write(&doc, "#include \"later/draft.typ\"\n").unwrap();
+        let preview = start(&dir, &doc);
+        let mut events = Events::connect(&preview);
+        assert!(get(&preview, "/content").contains("typst-errors"));
+
+        // The directory and file arrive, and a save of the document renders
+        // again: the dependency is the same path, but now it can be watched.
+        fs::create_dir(dir.join("later")).unwrap();
+        let draft = dir.join("later/draft.typ");
+        fs::write(&draft, "draft\n").unwrap();
+        assert!(!get(&preview, "/content").contains("typst-errors"));
+        events.settle();
+
+        fs::write(&draft, "draft changed\n").unwrap();
         assert_eq!(events.next(), "event: reload\ndata:\n\n");
     }
 
