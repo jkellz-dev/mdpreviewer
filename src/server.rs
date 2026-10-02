@@ -951,6 +951,9 @@ mod integration_tests {
         fs::write(&b, "# B\n").unwrap();
         let preview = start(&dir, &a);
         let mut events = Events::connect(&preview);
+        // macOS can replay the write that created a.md into the first watch;
+        // that reload would be read as the switch's.
+        events.settle();
 
         assert!(matches!(open(&preview, &b, Some(1)), Reply::Ok { .. }));
         assert_eq!(events.next(), "event: reload\ndata:\n\n");
