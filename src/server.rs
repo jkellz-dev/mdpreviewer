@@ -117,6 +117,10 @@ struct Current {
     /// Shared so that `/content` compiles without holding the `current` lock.
     /// The session's own lock keeps two tabs from compiling at once.
     typst: Option<Arc<Mutex<typeset::Session>>>,
+    /// The files the last Typst compile read besides the document itself.
+    /// Changing one sends [`Event::Reload`], through `dependency_watcher`.
+    dependencies: Vec<PathBuf>,
+    dependency_watcher: Option<RecommendedWatcher>,
 }
 
 impl Current {
@@ -129,6 +133,8 @@ impl Current {
             images: BTreeSet::new(),
             image_watcher: None,
             typst,
+            dependencies: Vec::new(),
+            dependency_watcher: None,
         }
     }
 }
@@ -265,6 +271,34 @@ impl State {
                     None
                 }
             };
+    }
+
+    /// Watch the files the last compile of `doc` read, unless the set is
+    /// unchanged or `doc` stopped being current in the meantime. A file in a
+    /// directory that does not exist (an include not written yet) is left
+    /// out, because one unwatchable path would fail the whole watch.
+    fn watch_dependencies(&self, doc: &Path, dependencies: Vec<PathBuf>) {
+        let mut current = self.current.lock().unwrap();
+        if current.path != doc || current.dependencies == dependencies {
+            return;
+        }
+        let watchable: Vec<PathBuf> = dependencies
+            .iter()
+            .filter(|path| path.parent().is_some_and(Path::is_dir))
+            .cloned()
+            .collect();
+        current.dependency_watcher = if watchable.is_empty() {
+            None
+        } else {
+            match watch::watch_files(&watchable, Event::Reload, self.events_tx.clone()) {
+                Ok(watcher) => Some(watcher),
+                Err(err) => {
+                    eprintln!("mdpreviewer: dependency watch failed: {err}");
+                    None
+                }
+            }
+        };
+        current.dependencies = dependencies;
     }
 
     /// The number of connected tabs, after flushing out any that closed since
@@ -519,8 +553,12 @@ fn serve_content(request: Request, state: &State) {
         // A panic in the compiler poisons the lock. Every render starts by
         // marking the session's files stale, so carry on with it.
         Some(session) => {
-            let mut session = session.lock().unwrap_or_else(PoisonError::into_inner);
-            session.render().html
+            let rendered = session
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .render();
+            state.watch_dependencies(&path, rendered.dependencies);
+            rendered.html
         }
         None => match fs::read_to_string(&path) {
             Ok(markdown) => render::render_markdown(&markdown),
@@ -1147,6 +1185,45 @@ mod integration_tests {
 
         assert_eq!(status(&follow(&preview, "thesis.typ")), "204");
         assert!(get(&preview, "/content").contains("typst-page"));
+    }
+
+    #[test]
+    fn editing_an_included_file_reloads() {
+        let dir = TestDir::new("typst-dep");
+        let doc = dir.join("main.typ");
+        let chapter = dir.join("chapter.typ");
+        fs::write(&doc, "#include \"chapter.typ\"\n").unwrap();
+        fs::write(&chapter, "one\n").unwrap();
+        let preview = start(&dir, &doc);
+        let mut events = Events::connect(&preview);
+
+        // Rendering is what learns the dependencies and starts their watch.
+        get(&preview, "/content");
+        events.settle();
+
+        fs::write(&chapter, "two\n").unwrap();
+        assert_eq!(events.next(), "event: reload\ndata:\n\n");
+    }
+
+    #[test]
+    fn a_dependency_in_a_missing_directory_does_not_stop_the_watch() {
+        let dir = TestDir::new("typst-dep-missing");
+        let doc = dir.join("main.typ");
+        let chapter = dir.join("chapter.typ");
+        fs::write(
+            &doc,
+            "#include \"chapter.typ\"\n#include \"later/draft.typ\"\n",
+        )
+        .unwrap();
+        fs::write(&chapter, "one\n").unwrap();
+        let preview = start(&dir, &doc);
+        let mut events = Events::connect(&preview);
+
+        assert!(get(&preview, "/content").contains("typst-errors"));
+        events.settle();
+
+        fs::write(&chapter, "two\n").unwrap();
+        assert_eq!(events.next(), "event: reload\ndata:\n\n");
     }
 
     #[test]

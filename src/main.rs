@@ -23,7 +23,6 @@ mod render;
 mod server;
 #[cfg(all(test, unix))]
 mod testutil;
-#[cfg_attr(not(test), allow(dead_code))]
 mod typeset;
 mod watch;
 
