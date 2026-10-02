@@ -4,8 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-`mdpreviewer <file.md>` is a single-binary Rust CLI (edition 2024) that serves a live-reloading browser preview of one
-Markdown file, with mermaid diagrams.
+`mdpreviewer <file.md|file.typ>` is a single-binary Rust CLI (edition 2024) that serves a live-reloading browser preview
+of one Markdown file (with mermaid diagrams) or Typst document.
 
 **Purpose:** give Helix the "edit Markdown, see it rendered live in a browser" workflow that nvim gets from plugins like
 markdown-preview.nvim. Helix has no plugin system, so the preview has to be an external process launched from a
@@ -39,15 +39,17 @@ mise run release:check  # lint, test, and package the crate, as CI would
 Linting and formatting go through [hk](https://hk.jdx.dev/) (`hk.pkl`), not ad-hoc tool invocations: rustfmt, clippy,
 oxfmt for `assets/app.js`, yamlfmt, actionlint and zizmor for the workflows, taplo for TOML, rumdl for Markdown.
 `assets/vendor/` is excluded everywhere and `examples/` and `docs/superpowers/` are excluded from Markdown rules. Every
-tool is pinned in `.config/mise/config.toml`, and CI runs the same `mise run lint`. Git hooks are pointless here because
-the repo is developed with Jujutsu, which does not run them.
+tool is pinned in `.config/mise/config.toml` except Rust, which `rust-toolchain.toml` pins for rustup, mise and CI
+alike, and CI runs the same `mise run lint`. Git hooks are pointless here because the repo is developed with Jujutsu,
+which does not run them.
 
 Releases are automated with [release-plz](https://release-plz.dev/): a push to `main` keeps a version-bump PR open, and
 merging it publishes to crates.io, tags, creates the GitHub release and attaches macOS arm64 and Linux x86_64 binaries.
-The release job first runs `ci.yml` as a reusable workflow, so a commit that fails CI is never published, and CI also
-checks the MSRV (`rust-version`, 1.88). The binary job hangs off the release job rather than a `release: published`
-trigger, because a release created with `GITHUB_TOKEN` does not start new workflow runs. Actions are pinned to commit
-SHAs, with Dependabot bumping them on a 7 day cooldown.
+The release job first runs `ci.yml` as a reusable workflow, so a commit that fails CI is never published, and CI builds
+with the pinned toolchain, which equals `rust-version` (1.99, the latest stable; bump the two together), so that run is
+also the MSRV check. The binary job hangs off the release job rather than a `release: published` trigger, because a
+release created with `GITHUB_TOKEN` does not start new workflow runs. Actions are pinned to commit SHAs, with Dependabot
+bumping them on a 7 day cooldown.
 
 Standard `cargo build`, `cargo clippy`, `cargo fmt`, `cargo test` apply. Tests are inline `#[cfg(test)]` modules.
 `server.rs` has in-process integration tests (real server, temp socket, `idle_grace: None`). `src/testutil.rs` has
@@ -58,14 +60,15 @@ capped at 104 bytes, and macOS's `TMPDIR` under `/var/folders` overflows that, s
 To try a change manually: `cargo run -- examples/<file>.md`. `examples/` holds fixed lorem ipsum fixtures: `basics.md`
 (GFM, front matter, raw HTML, and two data-URI SVG images (one plain, one linked, to cover the zoom overlay's link
 guard)), `mermaid.md` (one of each diagram type plus a deliberately invalid one) and `front-matter.md` (escaping and
-edge cases). On Unix the process forks and the parent exits immediately, so the server runs detached in the background.
-It prints the URL only when stdout is a TTY, and exits on its own ~15s after the last browser tab closes. Use
-`--no-open` to get the URL without opening a tab, and a scratch `XDG_RUNTIME_DIR` to avoid reusing your real server.
+edge cases), plus `typst.typ` (pages, math, a table, a figure from `typst-figure.svg`, and an `#include` of
+`typst-chapter.typ`). On Unix the process forks and the parent exits immediately, so the server runs detached in the
+background. It prints the URL only when stdout is a TTY, and exits on its own ~15s after the last browser tab closes.
+Use `--no-open` to get the URL without opening a tab, and a scratch `XDG_RUNTIME_DIR` to avoid reusing your real server.
 Kill test servers by PID (`ss -xlpn | grep mdpreviewer.sock` shows it).
 
 ## Architecture
 
-Request/reload flow across the five modules:
+Request/reload flow across the modules:
 
 1. **`main.rs`** parses `[--line N] [--no-open] [--sync|--quit|--restart] [<file>]` (the mode flags are mutually
    exclusive; `--quit` takes no file). Open mode first asks a running server over the control socket to switch to the
@@ -74,13 +77,14 @@ Request/reload flow across the five modules:
    kernel accept backlog before the child's server loop starts. The child calls `setsid()` and redirects stdio to
    `/dev/null`, so the launching editor's pipe sees EOF. Sync mode only sends the request (500 ms timeout) and always
    exits 0 silently. Any mode that takes a file expands a leading `~` (Helix reports files outside its cwd as `~/...`
-   and the quoted binding stops the shell expanding it) and refuses non-Markdown files, open and restart included, so a
-   preview keybinding pressed in a source buffer cannot leave a dead server. Refusals go through `fail` (stderr, exit 1)
-   rather than `report`, which is TTY-gated: Helix's `:sh` pops up whatever a command writes, so a silent refusal reads
-   as a broken binding, while a TTY-gated success keeps the URL out of that popup. `--quit` sends `quit` and exits 0
-   whether or not a server answered; `--restart` does that, polls `control::is_listening` (20 ms steps, 2 s cap) until
-   the old server has released the socket, then opens normally, or fails if it never does. On non-Unix platforms it runs
-   in the foreground and `--sync`, `--quit` and `--restart` are no-ops.
+   and the quoted binding stops the shell expanding it) and refuses files that are neither Markdown nor Typst
+   (`render::kind`), open and restart included, so a preview keybinding pressed in a source buffer cannot leave a dead
+   server. Refusals go through `fail` (stderr, exit 1) rather than `report`, which is TTY-gated: Helix's `:sh` pops up
+   whatever a command writes, so a silent refusal reads as a broken binding, while a TTY-gated success keeps the URL out
+   of that popup. `--quit` sends `quit` and exits 0 whether or not a server answered; `--restart` does that, polls
+   `control::is_listening` (20 ms steps, 2 s cap) until the old server has released the socket, then opens normally, or
+   fails if it never does. On non-Unix platforms it runs in the foreground and `--sync`, `--quit` and `--restart` are
+   no-ops.
 2. **`control.rs`** (Unix) handles the socket:
    - Its path: `$XDG_RUNTIME_DIR/mdpreviewer.sock`, or a 0700 `mdpreviewer-<uid>` dir in the temp dir.
    - The one-line protocol: `open\t<path>\t<line>\n` → `ok\t<url>\t<clients>\n`, `quit\n` → `bye\n`, or
@@ -106,12 +110,14 @@ Request/reload flow across the five modules:
      for `idle_grace` (15s), removing the socket first. It only arms after the first client has connected.
      `idle_grace: None` disables it for tests.
    - `/content` re-reads and re-renders the current file on every request, with no caching, and names it in
-     `X-Mdpreviewer-File` (percent-encoded).
+     `X-Mdpreviewer-File` (percent-encoded). A Typst document renders through the `typeset::Session` held in
+     `Current::typst`, and the files that compile read are watched (`watch_dependencies`), so editing an include sends
+     `reload`.
    - The page always lives at `/`, so the browser cannot resolve a document's relative references itself; the server
      resolves them against the current document's directory (`resolve_link`: percent-decode, refuse absolute paths,
-     canonicalize, require an existing file). `POST /open` (body: the link as written) follows a relative Markdown link
-     through the same `switch_to` a control `open` uses. It requires an `X-Mdpreviewer` header, which a browser will not
-     send cross-origin without a CORS preflight the server never grants, and rejects other methods.
+     canonicalize, require an existing file). `POST /open` (body: the link as written) follows a relative link to a
+     document through the same `switch_to` a control `open` uses. It requires an `X-Mdpreviewer` header, which a browser
+     will not send cross-origin without a CORS preflight the server never grants, and rejects other methods.
      `GET /file?path=<link>` serves relative images, image extensions only (checked on the canonical path, so a symlink
      or `..` cannot reach other files), with `Content-Security-Policy: sandbox` so an SVG opened directly runs no
      script. Each image served is recorded in `Current::images` and watched (`watch::watch_files`, one watch per
@@ -122,6 +128,13 @@ Request/reload flow across the five modules:
    matter is parsed via comrak's `front_matter_delimiter`. comrak outputs nothing for that node, so `render.rs` prepends
    it as a collapsed `<details class="frontmatter">` YAML block. `render.sourcepos` is on, so blocks carry
    `data-sourcepos="L:C-L:C"` (inline elements too); the front matter `<details>` gets its node's range.
+6. **`typeset.rs`** embeds the typst compiler (typst-kit's `FileStore`, `FontStore`, `SystemPackages`). A `Session`
+   keeps the `World` between renders; `render` resets the file store so a save is seen, compiles, and returns the
+   fragment plus the project files it read. Each page is an SVG inside `div.typst-page`, followed by `div.typst-line`
+   markers positioned in percent of the page height and tagged `data-sourcepos="L:1-L:1"` from the glyph spans of the
+   main file, so `findBlock` needs no Typst-specific code. A failed compile returns an error banner above the last
+   successful pages. Fonts are scanned once per process; tests use only the embedded fonts. `https.rs` is the package
+   downloader: typst-kit's `Downloader` trait on ureq with rustls (no OpenSSL).
 
 **Client (`assets/app.js`)**: on load and on every `reload` event, it:
 

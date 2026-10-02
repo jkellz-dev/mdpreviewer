@@ -1,7 +1,8 @@
 # mdpreviewer
 
 A small, self-contained CLI that serves a live-reloading browser preview of a
-Markdown file, including [mermaid](https://mermaid.js.org/) diagrams. Built to
+Markdown file, including [mermaid](https://mermaid.js.org/) diagrams, or of a
+[Typst](https://typst.app/) document. Built to
 replace an editor plugin (for example nvim's markdown-preview) with an external
 process, so it works with any editor that can run a shell command, such as
 Helix.
@@ -55,8 +56,8 @@ the open tab switches to the new file. A new tab opens only if none is open.
   highlighting that block.
 - `--sync` only talks to a running server. It never starts one, never opens a
   tab and never prints anything, so it is cheap enough to run on every save.
-- Every mode that takes a file ignores anything that is not `.md` or
-  `.markdown`, so a preview binding is inert in a source buffer. A leading `~`
+- Every mode that takes a file ignores anything that is not `.md`,
+  `.markdown` or `.typ`, so a preview binding is inert in a source buffer. A leading `~`
   in the path is expanded.
 - `--quit` stops the running server and its browser tabs stop updating. It takes
   no file, and exits 0 whether or not a server was running.
@@ -102,6 +103,22 @@ image files are served that way, and relative links to anything
 other than Markdown are left to the browser. Saving in the editor switches the preview back to the
 file being edited, since `C-s` tells the server which file that is.
 
+### Typst
+
+A `.typ` file is compiled in-process, with the typst compiler built into the
+binary, and shown as its pages, the way the PDF would look. Saving the document,
+or any file it reads (`#include`, `#import`, images, data), reloads the preview.
+While a save does not compile, the last pages that did stay up under the error
+list.
+
+The document's directory is the project root, as with `typst compile`. System
+fonts are used, with typst's own fonts as a fallback. `@preview` packages come
+from the same cache as the typst CLI and are downloaded on first use.
+
+`--line N` and `C-s` scroll to the text a line produced. A line that produces no
+text of its own (a `#set` rule, an image, an equation) scrolls to the nearest
+text before it, and lines inside an `#include`d file do not scroll.
+
 ### Helix
 
 Helix has no plugin system, so the preview is an ordinary command bound to a
@@ -136,8 +153,8 @@ q = { command = ":sh mdpreviewer --quit", label = "Quit preview server" }
 | `\mq` | Stop the server                                                    |
 
 Helix has no per-filetype keymaps, so these run in every buffer. `mdpreviewer`
-only acts on `.md` and `.markdown` files; anywhere else it refuses with
-`not a Markdown file: <name>`, which Helix shows in its shell popup. That also
+only acts on `.md`, `.markdown` and `.typ` files; anywhere else it refuses
+with `not a Markdown or Typst file: <name>`, which Helix shows in its shell popup. That also
 covers `[scratch]` buffers, where `:w` fails first but Helix runs the rest of
 the list anyway.
 
@@ -167,7 +184,8 @@ mise run install        # build + symlink target/release/mdpreviewer into ~/.loc
 mise run update-vendor  # refresh the vendored browser assets
 ```
 
-Or with cargo directly:
+The Rust toolchain is pinned in `rust-toolchain.toml`, which rustup reads, so a
+plain `cargo` in the repo uses it too:
 
 ```sh
 cargo build --release
@@ -234,12 +252,16 @@ Override versions via `MERMAID_VERSION` / `GH_MD_CSS_VERSION`.
   (GFM extensions; raw HTML passed through for fidelity; `data-sourcepos` on
   blocks for scroll sync). Fenced `mermaid` blocks are left as code blocks and
   turned into diagrams by the client.
+- `typeset.rs` compiles Typst documents with the embedded compiler, renders each
+  page as an SVG, and lays invisible `data-sourcepos` markers over each page so
+  scroll sync works as it does for Markdown. `https.rs` downloads `@preview`
+  packages over rustls.
 - `watch.rs` watches the file's parent directory (to survive editor
   atomic-rename saves) and emits debounced reload events.
 - `server.rs` serves the shell page, the rendered fragment (`/content`), an SSE
   stream of `reload` and `scroll` events (`/events`), and the embedded assets.
   It switches documents when asked over the control socket or when a relative
-  Markdown link is clicked (`/open`), and serves relative images (`/file`).
+  link to a document is clicked (`/open`), and serves relative images (`/file`).
 - `assets/app.js` renders the fragment, turns mermaid fences into diagrams,
   reloads on SSE events, scrolls to the cursor line, and provides the
   click-to-zoom overlay.

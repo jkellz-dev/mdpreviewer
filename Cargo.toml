@@ -5,12 +5,12 @@ edition = "2024"
 # The latest stable Rust, matching the toolchain pinned in
 # rust-toolchain.toml. Bump the two together.
 rust-version = "1.99"
-description = "Live-reloading browser preview for a single Markdown file, with mermaid diagrams and cursor sync for Helix."
+description = "Live-reloading browser preview for a single Markdown or Typst file, with mermaid diagrams and cursor sync for Helix."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/jkellz-dev/mdpreviewer"
 homepage = "https://github.com/jkellz-dev/mdpreviewer"
 readme = "README.md"
-keywords = ["markdown", "preview", "helix", "mermaid", "live-reload"]
+keywords = ["markdown", "typst", "preview", "helix", "live-reload"]
 categories = ["command-line-utilities", "text-processing", "development-tools"]
 include = [
     "src/**/*.rs",
