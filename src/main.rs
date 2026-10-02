@@ -18,6 +18,8 @@
 
 #[cfg(unix)]
 mod control;
+#[cfg_attr(not(test), allow(dead_code))]
+mod https;
 mod render;
 mod server;
 #[cfg(all(test, unix))]

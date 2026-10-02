@@ -2,9 +2,9 @@
 name = "mdpreviewer"
 version = "0.1.2"
 edition = "2024"
-# The floor is set by the bon and darling dependencies, which require 1.88.
-# Verified with `cargo +1.88 check --all-targets --locked`.
-rust-version = "1.88"
+# The latest stable Rust, matching the toolchain pinned in
+# rust-toolchain.toml. Bump the two together.
+rust-version = "1.99"
 description = "Live-reloading browser preview for a single Markdown file, with mermaid diagrams and cursor sync for Helix."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/jkellz-dev/mdpreviewer"
@@ -26,6 +26,11 @@ comrak = "0.55.0"
 notify = "8.2.0"
 open = "5.4.4"
 tiny_http = "0.12.0"
+typst = "0.15.1"
+typst-kit = { version = "0.15.1", features = ["scan-fonts", "embedded-fonts", "system-files", "datetime"] }
+typst-layout = "0.15.1"
+typst-svg = "0.15.1"
+ureq = { version = "3.4.2", default-features = false, features = ["rustls", "gzip", "platform-verifier"] }
 
 [target."cfg(unix)".dependencies]
 libc = "0.2.189"

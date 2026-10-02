@@ -1,0 +1,6 @@
+# The one place the Rust toolchain is pinned. rustup, cargo, mise and CI all
+# read it. `rust-version` in Cargo.toml matches it; bump the two together.
+[toolchain]
+channel = "1.99.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
