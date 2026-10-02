@@ -34,6 +34,11 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: mise run lint
+        env:
+          # pinact checks pins against the GitHub API, which rate-limits
+          # calls without a token. This variable is pinact's own, so zizmor
+          # stays in offline mode.
+          PINACT_GITHUB_TOKEN: ${{ github.token }}
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

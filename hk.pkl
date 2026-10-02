@@ -17,6 +17,10 @@ local linters = new Mapping {
   // GitHub Actions security lint: unpinned actions, injectable expressions,
   // over-broad permissions.
   ["zizmor"] = Builtins.zizmor
+  // Pins `uses:` to commit SHAs with a version comment, and checks existing
+  // pins against their comments. zizmor flags unpinned actions too, but only
+  // its unsafe fixes pin them, and format applies its safe ones.
+  ["pinact"] = Builtins.pinact
   ["taplo"] = Builtins.taplo
   // The builtin has no glob of its own, so it would be handed every file
   // in the repo, including TOML and Markdown. It formats the browser assets:
