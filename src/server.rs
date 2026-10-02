@@ -4,13 +4,13 @@
 //!
 //! Routes:
 //!   GET /                       preview shell (HTML)
-//!   GET /content                rendered markdown fragment; the
+//!   GET /content                the rendered document fragment; the
 //!                               `X-Mdpreviewer-File` header carries the
 //!                               percent-encoded file name
 //!   GET /events                 Server-Sent Events: `reload` and `scroll`
-//!   POST /open                  follow a relative Markdown link: the body is
-//!                               the link as written, and the document it
-//!                               names becomes the current one
+//!   POST /open                  follow a relative link to a document: the
+//!                               body is the link as written, and the
+//!                               document it names becomes the current one
 //!   GET /file?path=<link>       an image the document refers to by a
 //!                               relative path
 //!   GET /assets/app.css         page styling
@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::Duration;
 
@@ -36,7 +36,7 @@ use tiny_http::{Header, Method, Request, Response, Server};
 
 #[cfg(unix)]
 use crate::control;
-use crate::{render, watch};
+use crate::{render, typeset, watch};
 
 const SHELL_HTML: &str = include_str!("../assets/shell.html");
 const APP_CSS: &str = include_str!("../assets/app.css");
@@ -104,8 +104,8 @@ pub struct Config {
 /// events out to all of them.
 type Clients = Arc<Mutex<Vec<Sender<Event>>>>;
 
-/// The document being previewed, the watch that reloads it, and the images
-/// it has shown.
+/// The document being previewed, the watch that reloads it, the images it
+/// has shown, and for a Typst document the compiler session.
 struct Current {
     path: PathBuf,
     /// Held only to keep the watch alive; replacing it stops the old watch.
@@ -114,15 +114,21 @@ struct Current {
     /// one sends [`Event::Images`], through `image_watcher`.
     images: BTreeSet<PathBuf>,
     image_watcher: Option<RecommendedWatcher>,
+    /// Shared so that `/content` compiles without holding the `current` lock.
+    /// The session's own lock keeps two tabs from compiling at once.
+    typst: Option<Arc<Mutex<typeset::Session>>>,
 }
 
 impl Current {
     fn new(path: PathBuf, events_tx: &Sender<Event>) -> Self {
+        let typst = (render::kind(&path) == Some(render::Kind::Typst))
+            .then(|| Arc::new(Mutex::new(typeset::Session::new(&path))));
         Current {
             _watcher: start_watch(&path, events_tx),
             path,
             images: BTreeSet::new(),
             image_watcher: None,
+            typst,
         }
     }
 }
@@ -380,7 +386,7 @@ fn handle(request: Request, state: &State) {
     }
 }
 
-/// `POST /open`: follow a relative link to another Markdown document. The
+/// `POST /open`: follow a relative link to another document. The
 /// page always lives at `/`, so the browser cannot resolve such a link
 /// itself; the client sends it as written and it is resolved here, against
 /// the current document's directory. The switch reaches every tab as a
@@ -402,8 +408,8 @@ fn follow_link(mut request: Request, state: &State) {
     };
     // Checked on the resolved path, so a `.md` symlink to something else is
     // refused rather than rendered.
-    if !render::is_markdown(&path) {
-        return status(request, 400, "not a Markdown file");
+    if render::kind(&path).is_none() {
+        return status(request, 400, "not a Markdown or Typst file");
     }
     state.switch_to(path);
     let _ = request.respond(Response::empty(204));
@@ -501,18 +507,29 @@ fn status(request: Request, code: u16, reason: &str) {
 }
 
 /// Render the current document, with its file name in `X-Mdpreviewer-File` for
-/// the page title. Read errors are reported inline so the browser shows the
-/// problem rather than a blank page.
+/// the page title. Problems are reported inline so the browser shows them
+/// rather than a blank page.
 fn serve_content(request: Request, state: &State) {
-    // Clone the path so the lock is not held while reading and rendering.
-    let path = state.current.lock().unwrap().path.clone();
-    let body = match fs::read_to_string(&path) {
-        Ok(markdown) => render::render_markdown(&markdown),
-        Err(err) => format!(
-            "<h1>mdpreviewer</h1><p>Could not read <code>{}</code>: {}</p>",
-            path.display(),
-            err
-        ),
+    // Clone what is needed so the lock is not held while rendering.
+    let (path, typst) = {
+        let current = state.current.lock().unwrap();
+        (current.path.clone(), current.typst.clone())
+    };
+    let body = match typst {
+        // A panic in the compiler poisons the lock. Every render starts by
+        // marking the session's files stale, so carry on with it.
+        Some(session) => {
+            let mut session = session.lock().unwrap_or_else(PoisonError::into_inner);
+            session.render().html
+        }
+        None => match fs::read_to_string(&path) {
+            Ok(markdown) => render::render_markdown(&markdown),
+            Err(err) => format!(
+                "<h1>mdpreviewer</h1><p>Could not read <code>{}</code>: {}</p>",
+                path.display(),
+                err
+            ),
+        },
     };
     let name = path
         .file_name()
@@ -1079,6 +1096,57 @@ mod integration_tests {
 
         let content = get(&preview, "/content");
         assert!(content.contains(">A</h1>"), "{content}");
+    }
+
+    #[test]
+    fn typst_documents_are_served_as_pages() {
+        let dir = TestDir::new("typst-content");
+        let doc = dir.join("main.typ");
+        fs::write(&doc, "= Hello\n").unwrap();
+        let preview = start(&dir, &doc);
+
+        let content = get(&preview, "/content");
+        assert!(
+            content
+                .to_ascii_lowercase()
+                .contains("x-mdpreviewer-file: main.typ"),
+            "{content}"
+        );
+        assert!(content.contains("<div class=\"typst-page\""), "{content}");
+        assert!(content.contains("data-sourcepos=\"1:1-1:1\""), "{content}");
+    }
+
+    #[test]
+    fn switching_between_markdown_and_typst_renders_each() {
+        let dir = TestDir::new("typst-switch");
+        let a = dir.join("a.md");
+        let b = dir.join("b.typ");
+        fs::write(&a, "# A\n").unwrap();
+        fs::write(&b, "= B\n").unwrap();
+        let preview = start(&dir, &a);
+
+        assert!(matches!(open(&preview, &b, None), Reply::Ok { .. }));
+        assert!(get(&preview, "/content").contains("typst-page"));
+        assert!(matches!(open(&preview, &a, None), Reply::Ok { .. }));
+        let content = get(&preview, "/content");
+        assert!(content.contains(">A</h1>"), "{content}");
+        assert!(!content.contains("typst-page"), "{content}");
+        // Back again: a fresh session, which compiles from scratch.
+        fs::write(&b, "= B changed\n").unwrap();
+        assert!(matches!(open(&preview, &b, None), Reply::Ok { .. }));
+        assert!(get(&preview, "/content").contains("typst-page"));
+    }
+
+    #[test]
+    fn a_relative_link_to_a_typst_document_is_followed() {
+        let dir = TestDir::new("typst-link");
+        let a = dir.join("a.md");
+        fs::write(&a, "[thesis](thesis.typ)\n").unwrap();
+        fs::write(dir.join("thesis.typ"), "= Thesis\n").unwrap();
+        let preview = start(&dir, &a);
+
+        assert_eq!(status(&follow(&preview, "thesis.typ")), "204");
+        assert!(get(&preview, "/content").contains("typst-page"));
     }
 
     #[test]

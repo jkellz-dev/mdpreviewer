@@ -18,7 +18,6 @@
 
 #[cfg(unix)]
 mod control;
-#[cfg_attr(not(test), allow(dead_code))]
 mod https;
 mod render;
 mod server;
@@ -34,9 +33,9 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::time::Duration;
 
-const USAGE: &str = "usage: mdpreviewer [--line N] [--no-open] <file.md>\n       \
-                     mdpreviewer --sync [--line N] <file.md>\n       \
-                     mdpreviewer --restart [--line N] [--no-open] <file.md>\n       \
+const USAGE: &str = "usage: mdpreviewer [--line N] [--no-open] <file.md|file.typ>\n       \
+                     mdpreviewer --sync [--line N] <file.md|file.typ>\n       \
+                     mdpreviewer --restart [--line N] [--no-open] <file.md|file.typ>\n       \
                      mdpreviewer --quit";
 
 /// Printed under [`USAGE`] by `--help`.
@@ -155,10 +154,10 @@ fn main() {
         // Refuse before restarting, so a stray keypress in a source file
         // cannot take the preview server down with it.
         Mode::Restart | Mode::Open
-            if !render::is_markdown(Path::new(args.file.as_deref().unwrap_or_default())) =>
+            if render::kind(Path::new(args.file.as_deref().unwrap_or_default())).is_none() =>
         {
             fail(&format!(
-                "not a Markdown file: {}",
+                "not a Markdown or Typst file: {}",
                 args.file.as_deref().unwrap_or_default()
             ));
         }
@@ -258,7 +257,7 @@ fn run_sync(args: &Args) {
     let Some(file) = &args.file else {
         return;
     };
-    if !render::is_markdown(Path::new(file)) {
+    if render::kind(Path::new(file)).is_none() {
         return;
     }
     let Ok(path) = expand_tilde(file).canonicalize() else {
