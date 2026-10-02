@@ -36,19 +36,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-      - run: cargo test --all-targets
-  msrv:
-    name: Minimum supported Rust
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      # Keep in step with `rust-version` in Cargo.toml.
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-        with:
-          toolchain: "1.88"
-      - run: cargo check --locked --all-targets
+      # rustup, preinstalled on the runners, installs the toolchain that
+      # rust-toolchain.toml pins. It equals `rust-version`, so this run is
+      # also the minimum-supported-Rust check.
+      - run: cargo test --locked --all-targets
