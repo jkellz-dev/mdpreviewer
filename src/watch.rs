@@ -4,12 +4,15 @@
 //! over the target, so the target's inode changes and a direct file watch can
 //! go stale. To be robust we watch the file's parent directory and filter
 //! events down to the target path, with a short debounce to coalesce the
-//! burst of events a single save produces.
+//! burst of events a single save produces. An event only counts if a target
+//! changed since the watch last reported, because macOS can deliver events for
+//! writes made before the watch started.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
@@ -47,7 +50,7 @@ pub fn watch_files(
         })
         .collect();
 
-    let (raw_tx, raw_rx) = channel::<notify::Result<notify::Event>>();
+    let raw_tx = debounce(targets, event, events_tx);
     let mut watcher = notify::recommended_watcher(move |res| {
         let _ = raw_tx.send(res);
     })?;
@@ -55,18 +58,64 @@ pub fn watch_files(
         watcher.watch(parent, RecursiveMode::NonRecursive)?;
     }
 
-    std::thread::spawn(move || debounce_loop(raw_rx, events_tx, targets, event));
-
     Ok(watcher)
+}
+
+/// Start the thread that turns raw events about `targets` into debounced
+/// `event` signals, and return the sender the raw events go to. The targets
+/// are looked at here, before the watch starts, so a write after this point
+/// either changes what [`debounce_loop`] compares against or was never going
+/// to produce an event.
+fn debounce(
+    targets: BTreeSet<PathBuf>,
+    event: Event,
+    events_tx: Sender<Event>,
+) -> Sender<notify::Result<notify::Event>> {
+    let seen = targets
+        .into_iter()
+        .map(|target| {
+            let state = Fingerprint::of(&target);
+            (target, state)
+        })
+        .collect();
+    let (raw_tx, raw_rx) = channel::<notify::Result<notify::Event>>();
+    std::thread::spawn(move || debounce_loop(raw_rx, events_tx, seen, event));
+    raw_tx
+}
+
+/// What a file looked like when last checked: enough to tell a new write
+/// from an event about an old one. Saving identical content still counts as
+/// a write, because it moves the modification time. `None` in a slot means
+/// the file was missing.
+#[derive(Debug, PartialEq, Eq)]
+struct Fingerprint {
+    len: u64,
+    modified: Option<SystemTime>,
+    /// Changes when a save replaces the file by renaming another over it.
+    #[cfg(unix)]
+    inode: u64,
+}
+
+impl Fingerprint {
+    fn of(path: &Path) -> Option<Fingerprint> {
+        let meta = fs::metadata(path).ok()?;
+        Some(Fingerprint {
+            len: meta.len(),
+            modified: meta.modified().ok(),
+            #[cfg(unix)]
+            inode: std::os::unix::fs::MetadataExt::ino(&meta),
+        })
+    }
 }
 
 /// Coalesce raw filesystem events into debounced `event` signals.
 fn debounce_loop(
     raw_rx: Receiver<notify::Result<notify::Event>>,
     events_tx: Sender<Event>,
-    targets: BTreeSet<PathBuf>,
+    mut seen: BTreeMap<PathBuf, Option<Fingerprint>>,
     event: Event,
 ) {
+    let targets: BTreeSet<PathBuf> = seen.keys().cloned().collect();
     loop {
         let first = match raw_rx.recv() {
             Ok(event) => event,
@@ -87,10 +136,24 @@ fn debounce_loop(
             }
         }
 
-        if relevant && events_tx.send(event).is_err() {
+        if relevant && changed(&mut seen) && events_tx.send(event).is_err() {
             return;
         }
     }
+}
+
+/// Whether any target differs from when it was last checked, recording what
+/// each looks like now.
+fn changed(seen: &mut BTreeMap<PathBuf, Option<Fingerprint>>) -> bool {
+    let mut any = false;
+    for (path, state) in seen.iter_mut() {
+        let now = Fingerprint::of(path);
+        if *state != now {
+            *state = now;
+            any = true;
+        }
+    }
+    any
 }
 
 /// Decide whether an event refers to one of our target files. Pure access
@@ -119,6 +182,34 @@ mod tests {
 
     /// How long to wait for something we expect to arrive.
     const EXPECT: Duration = Duration::from_secs(5);
+
+    /// macOS can hand a new watch an event for a write made before it
+    /// started, seconds late when the system is busy. A file that has not
+    /// changed since the watch began is not news; a write after it is.
+    #[test]
+    fn an_event_for_a_file_unchanged_since_the_watch_began_is_dropped() {
+        let dir = TestDir::new("watch-replay");
+        let doc = dir.join("a.md");
+        fs::write(&doc, "one").unwrap();
+        let (events_tx, events_rx) = channel();
+        let raw_tx = debounce(BTreeSet::from([doc.clone()]), Event::Reload, events_tx);
+        let modified = || {
+            Ok(
+                notify::Event::new(EventKind::Modify(notify::event::ModifyKind::Any))
+                    .add_path(doc.clone()),
+            )
+        };
+
+        raw_tx.send(modified()).unwrap();
+        assert_eq!(
+            events_rx.recv_timeout(DEBOUNCE * 4),
+            Err(RecvTimeoutError::Timeout)
+        );
+
+        fs::write(&doc, "two").unwrap();
+        raw_tx.send(modified()).unwrap();
+        assert_eq!(events_rx.recv_timeout(EXPECT), Ok(Event::Reload));
+    }
 
     /// One watch covers files in different directories, and sends the event
     /// it was given.
