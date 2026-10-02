@@ -32,12 +32,15 @@ mise run build          # cargo build --release
 mise run install        # build + symlink target/release/mdpreviewer into ~/.local/bin
 mise run update-vendor  # re-download assets/vendor/* (MERMAID_VERSION / GH_MD_CSS_VERSION override)
 mise run lint           # hk check --all: every linter and formatter
-mise run fix            # hk fix --all
+mise run format         # hk check --fix --all (alias: fix)
 mise run release:check  # lint, test, and package the crate, as CI would
 ```
 
 Linting and formatting go through [hk](https://hk.jdx.dev/) (`hk.pkl`), not ad-hoc tool invocations: rustfmt, clippy,
-oxfmt for `assets/app.js`, yamlfmt, actionlint and zizmor for the workflows, taplo for TOML, rumdl for Markdown.
+oxfmt for the browser assets (JS, CSS, HTML), typstyle for Typst, shfmt and shellcheck for shell, yamlfmt, actionlint
+and zizmor for the workflows, taplo for TOML, `pkl format` for `hk.pkl`, rumdl for Markdown. Shell indentation comes
+from `.editorconfig`. In CI the lint job runs `rustup toolchain install` first, because hk starts the cargo steps in
+parallel and two first-use toolchain installs race.
 `assets/vendor/` is excluded everywhere and `examples/` and `docs/superpowers/` are excluded from Markdown rules. Every
 tool is pinned in `.config/mise/config.toml` except Rust, which `rust-toolchain.toml` pins for rustup, mise and CI
 alike, and CI runs the same `mise run lint`. Git hooks are pointless here because the repo is developed with Jujutsu,

@@ -9,6 +9,10 @@ taplo = "latest"
 oxfmt = "latest"
 yamlfmt = "latest"
 rumdl = "latest"
+typstyle = "latest"
+shfmt = "latest"
+shellcheck = "latest"
+pkl = "latest"
 
 [tasks.build]
 description = "Build the release binary"
@@ -31,9 +35,10 @@ run = "sh scripts/update-vendor.sh"
 description = "Run every linter and formatter check (hk)"
 run = "hk check --all"
 
-[tasks.fix]
-description = "Apply every available lint and format fix (hk)"
-run = "hk fix --all"
+[tasks.format]
+description = "Apply every formatter and linter fix (hk), for every language in the repo"
+alias = "fix"
+run = "hk check --fix --all"
 
 [tasks."release:check"]
 description = "Everything the release workflow checks, before pushing"

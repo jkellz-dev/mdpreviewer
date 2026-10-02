@@ -197,13 +197,15 @@ cargo build --release
 run do the same work:
 
 ```sh
-mise run lint  # hk check --all
-mise run fix   # hk fix --all
+mise run lint    # hk check --all
+mise run format  # hk check --fix --all (alias: fix)
 ```
 
 `hk.pkl` lists the steps: rustfmt and clippy for Rust, oxfmt for the browser
-JavaScript, yamlfmt and actionlint and zizmor for the workflows, taplo for TOML,
-and rumdl for Markdown. `examples/` is excluded from Markdown formatting because
+JavaScript, CSS and HTML, typstyle for Typst, shfmt and shellcheck for shell
+scripts, yamlfmt and actionlint and zizmor for the workflows, taplo for TOML,
+`pkl format` for `hk.pkl` itself, and rumdl for Markdown. Shell indentation
+comes from `.editorconfig`. `examples/` is excluded from Markdown formatting because
 those files are fixtures whose odd formatting is the point, and
 `assets/vendor/` is excluded everywhere because it is pinned upstream code.
 
