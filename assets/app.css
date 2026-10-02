@@ -191,3 +191,56 @@ pre.mermaid svg,
     outline-color: transparent;
   }
 }
+
+/*
+ * Typst pages: white sheets on the dark background, as a PDF viewer shows
+ * them. The SVG keeps the document's own colours.
+ */
+.typst-page {
+  position: relative;
+  margin: 0 auto 1.5rem;
+  background: #fff;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.6);
+}
+
+.typst-page > svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  cursor: zoom-in;
+}
+
+/* Line markers only give scrolling a position to aim at. Clicks go through
+ * to the page, so it can still be zoomed. */
+.typst-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+}
+
+.typst-errors {
+  margin-bottom: 1.5rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid #f85149;
+  border-radius: 6px;
+  background: rgba(248, 81, 73, 0.1);
+}
+
+.typst-errors p {
+  margin: 0;
+}
+
+.typst-errors ul,
+.typst-warnings ul {
+  margin: 0.5rem 0 0;
+}
+
+.typst-warnings {
+  margin-bottom: 1.5rem;
+  color: #d29922;
+}
+
+.typst-hint {
+  color: #8b949e;
+}
