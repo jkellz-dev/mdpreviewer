@@ -1,8 +1,11 @@
-//! Typst to HTML: each page as an SVG.
+//! Typst to HTML: each page as an SVG, overlaid with invisible markers that
+//! tag where each source line landed, so the client's line-based scrolling
+//! works as it does for Markdown.
 //!
 //! A [`Session`] keeps the compiler's world between renders, so a recompile
 //! after a save only redoes the work the edit invalidated.
 
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -10,7 +13,8 @@ use std::sync::OnceLock;
 use comrak::html::escape;
 use typst::diag::{FileResult, SourceDiagnostic, Warned};
 use typst::foundations::{Bytes, Datetime, Duration};
-use typst::syntax::{DiagSpan, FileId, RootedPath, Source, VirtualPath, VirtualRoot};
+use typst::layout::{Abs, Frame, FrameItem, Transform};
+use typst::syntax::{DiagSpan, FileId, RootedPath, Source, Span, VirtualPath, VirtualRoot};
 use typst::text::{Font, FontBook};
 use typst::utils::LazyHash;
 use typst::{Library, LibraryExt, World, WorldExt};
@@ -18,9 +22,15 @@ use typst_kit::datetime::Time;
 use typst_kit::files::{FileStore, FsRoot, SystemFiles};
 use typst_kit::fonts::FontStore;
 use typst_kit::packages::SystemPackages;
-use typst_layout::PagedDocument;
+use typst_layout::{Page, PagedDocument};
 
 use crate::https::HttpsDownloader;
+
+/// How far a glyph reaches above and below its baseline, as a fraction of
+/// the font size. Close enough for every common font, and a marker only has
+/// to cover its line, not trace it.
+const ASCENT: f64 = 0.8;
+const DESCENT: f64 = 0.2;
 
 /// One Typst document being previewed.
 pub struct Session {
@@ -71,7 +81,7 @@ impl Session {
         let mut html = String::new();
         match output {
             Ok(document) => {
-                self.last_pages = Some(render_pages(&document));
+                self.last_pages = Some(render_pages(&self.world, &document));
             }
             Err(errors) => {
                 render_errors(&self.world, &errors, self.last_pages.is_some(), &mut html)
@@ -153,15 +163,103 @@ impl World for DocumentWorld {
     }
 }
 
-/// Every page as a `typst-page` element holding its SVG.
-fn render_pages(document: &PagedDocument) -> String {
+/// Every page as a `typst-page` element holding its SVG and line markers.
+fn render_pages(world: &DocumentWorld, document: &PagedDocument) -> String {
+    let main = world.source(world.main).ok();
+    let mut lines_of = HashMap::new();
     let mut html = String::new();
     for page in document.pages() {
-        html.push_str("<div class=\"typst-page\">");
-        html.push_str(&typst_svg::svg(page, &Default::default()));
-        html.push_str("</div>\n");
+        let extents = match &main {
+            Some(source) => line_extents(source, page, &mut lines_of),
+            None => BTreeMap::new(),
+        };
+        render_page(page, &extents, &mut html);
     }
     html
+}
+
+fn render_page(page: &Page, extents: &BTreeMap<usize, (Abs, Abs)>, html: &mut String) {
+    let height = page.frame.height().to_pt();
+    html.push_str("<div class=\"typst-page\"");
+    // The page's line range lets the client find it again after a reload.
+    if let (Some(first), Some(last)) = (extents.keys().next(), extents.keys().next_back()) {
+        let _ = write!(html, " data-sourcepos=\"{first}:1-{last}:1\"");
+    }
+    html.push('>');
+    html.push_str(&typst_svg::svg(page, &Default::default()));
+    for (line, (top, bottom)) in extents {
+        // Percentages of the page height keep the markers in place however
+        // wide the page is drawn.
+        let top = (top.to_pt() / height * 100.0).clamp(0.0, 100.0);
+        let bottom = (bottom.to_pt() / height * 100.0).clamp(0.0, 100.0);
+        let _ = write!(
+            html,
+            "<div class=\"typst-line\" data-sourcepos=\"{line}:1-{line}:1\" \
+             style=\"top:{top:.3}%;height:{:.3}%\"></div>",
+            bottom - top
+        );
+    }
+    html.push_str("</div>\n");
+}
+
+/// For each 1-based line of `source` that put text on `page`, the highest and
+/// lowest point of that text. Text from other files (includes, packages) is
+/// skipped: the editor's line numbers refer to the document itself.
+/// `lines_of` caches span lookups across pages.
+fn line_extents(
+    source: &Source,
+    page: &Page,
+    lines_of: &mut HashMap<Span, Option<usize>>,
+) -> BTreeMap<usize, (Abs, Abs)> {
+    let mut extents = BTreeMap::new();
+    let mut add = |span: Span, top: Abs, bottom: Abs| {
+        if span.id() != Some(source.id()) {
+            return;
+        }
+        let line = *lines_of.entry(span).or_insert_with(|| {
+            let offset = source.find(span)?.offset();
+            Some(source.lines().byte_to_line(offset)? + 1)
+        });
+        if let Some(line) = line {
+            let extent = extents.entry(line).or_insert((top, bottom));
+            extent.0 = extent.0.min(top);
+            extent.1 = extent.1.max(bottom);
+        }
+    };
+    walk_text(&page.frame, Transform::identity(), &mut add);
+    extents
+}
+
+/// Call `f` with the span and vertical extent of every glyph in `frame`,
+/// in page coordinates.
+fn walk_text(frame: &Frame, ts: Transform, f: &mut impl FnMut(Span, Abs, Abs)) {
+    for (pos, item) in frame.items() {
+        match item {
+            FrameItem::Group(group) => {
+                let ts = ts
+                    .pre_concat(Transform::translate(pos.x, pos.y))
+                    .pre_concat(group.transform);
+                walk_text(&group.frame, ts, f);
+            }
+            FrameItem::Text(text) => {
+                let baseline = pos.transform(ts).y;
+                let (top, bottom) = (
+                    baseline - text.size * ASCENT,
+                    baseline + text.size * DESCENT,
+                );
+                let mut previous = None;
+                for glyph in &text.glyphs {
+                    // Neighbouring glyphs usually share a span.
+                    let span = glyph.span.0;
+                    if previous != Some(span) {
+                        f(span, top, bottom);
+                        previous = Some(span);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// The banner for a failed compile. It carries the line of the first error
@@ -290,6 +388,13 @@ mod tests {
         html.split("<div class=\"typst-page\"").skip(1).collect()
     }
 
+    /// The `top` of the marker for `line` in `page`, in percent.
+    fn marker_top(page: &str, line: usize) -> Option<f64> {
+        let tag = format!("class=\"typst-line\" data-sourcepos=\"{line}:1-{line}:1\" style=\"top:");
+        let rest = &page[page.find(&tag)? + tag.len()..];
+        rest[..rest.find('%')?].parse().ok()
+    }
+
     const TWO_PAGES: &str = "#set page(height: 10cm)\nfirst\n\nsecond\n#pagebreak()\nthird\n";
 
     #[test]
@@ -303,11 +408,47 @@ mod tests {
     }
 
     #[test]
+    fn markers_place_lines_on_their_page_in_order() {
+        let mut doc = Doc::new("typst-markers", TWO_PAGES);
+        let html = doc.render().html;
+        let pages = pages(&html);
+        let first = marker_top(pages[0], 2).expect("line 2 on page 1");
+        let second = marker_top(pages[0], 4).expect("line 4 on page 1");
+        assert!(first < second, "{first} < {second}");
+        assert!(marker_top(pages[1], 6).is_some(), "line 6 on page 2");
+        assert!(marker_top(pages[1], 2).is_none(), "line 2 only on page 1");
+        // A line that puts no text on the page gets no marker.
+        assert!(marker_top(pages[0], 1).is_none(), "{html}");
+        // The page is tagged with its range of lines.
+        assert!(
+            pages[0].starts_with(" data-sourcepos=\"2:1-4:1\">"),
+            "{}",
+            pages[0]
+        );
+    }
+
+    #[test]
+    fn included_text_gets_no_markers() {
+        let mut doc = Doc::new("typst-include-lines", "intro\n#include \"chapter.typ\"\n");
+        doc.write("chapter.typ", "chapter text\n");
+        let html = doc.render().html;
+        let page = pages(&html)[0];
+        assert!(marker_top(page, 1).is_some(), "{page}");
+        // Line 1 of chapter.typ is not line 1 of main.typ, and line 2 of
+        // main.typ only names the include.
+        assert!(page.starts_with(" data-sourcepos=\"1:1-1:1\">"), "{page}");
+    }
+
+    #[test]
     fn a_recompile_reads_the_edited_file() {
         let mut doc = Doc::new("typst-edit", "one\n");
-        assert_eq!(pages(&doc.render().html).len(), 1);
-        doc.write("main.typ", "one\n#pagebreak()\ntwo\n");
-        assert_eq!(pages(&doc.render().html).len(), 2);
+        let html = doc.render().html;
+        assert_eq!(pages(&html).len(), 1);
+        assert!(marker_top(pages(&html)[0], 3).is_none());
+        doc.write("main.typ", "one\n\nthree\n#pagebreak()\ntwo\n");
+        let html = doc.render().html;
+        assert_eq!(pages(&html).len(), 2);
+        assert!(marker_top(pages(&html)[0], 3).is_some());
     }
 
     #[test]
