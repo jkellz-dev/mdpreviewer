@@ -21,7 +21,7 @@ jobs:
           persist-credentials: false
       # mise installs hk and every linter it drives, so CI and a local
       # `mise run lint` run exactly the same checks.
-      - uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
+      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
       # Install the toolchain rust-toolchain.toml pins before hk starts its
       # steps in parallel: two cargo steps that each trigger rustup's
       # first-use install race on the same download.
