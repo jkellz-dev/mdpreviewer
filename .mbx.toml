@@ -1,0 +1,21 @@
+# mr-boxington (mbx) workspace policy, read from the Cargo workspace root.
+# Only workspace-safe settings are accepted here.
+# https://mr-boxington.jdx.dev/configuration#workspace-policy
+
+# Link Linux builds with wild, a much faster linker, whenever the build runs
+# through mbx (`mbx build`, `mbx test`, and CI's jdx/mr-boxington-action). mbx
+# downloads the pinned wild release itself and routes native links through
+# clang, which it requires on PATH. mbx manages mold/wild on Linux only, so
+# every non-Linux target falls back to the system linker below and macOS
+# builds are untouched. Both profiles are pinned so debug and release Linux
+# builds use wild.
+[linker]
+default = "system"
+
+[linker.profiles.dev]
+x86_64-unknown-linux-gnu = "wild@0.11.0"
+aarch64-unknown-linux-gnu = "wild@0.11.0"
+
+[linker.profiles.release]
+x86_64-unknown-linux-gnu = "wild@0.11.0"
+aarch64-unknown-linux-gnu = "wild@0.11.0"

@@ -1,6 +1,10 @@
 [tools]
 # Rust is not listed: rust-toolchain.toml pins it, components included, and
 # rustup installs it on first use.
+# mr-boxington (mbx): Rust build-cache and linker manager. CI drives it through
+# jdx/mr-boxington-action; listing it here makes `mbx build`/`mbx test` and the
+# wild linker policy in .mbx.toml work locally too.
+mbx = "latest"
 actionlint = "latest"
 release-plz = "latest"
 hk = "2.1.0"
@@ -17,7 +21,7 @@ pinact = "latest"
 
 [tasks.build]
 description = "Build the release binary"
-run = "cargo build --release"
+run = "mbx build --release"
 
 [tasks.install]
 description = "Build and symlink mdpreviewer into ~/.local/bin"
@@ -46,7 +50,7 @@ description = "Everything the release workflow checks, before pushing"
 depends = ["lint"]
 run = '''
 set -e
-cargo test --all-targets
+mbx test --all-targets
 # --allow-dirty because in this colocated jj repo the git worktree only
 # catches up with the working copy when a jj command snapshots it.
 cargo package --locked --allow-dirty
