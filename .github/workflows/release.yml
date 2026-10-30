@@ -91,6 +91,13 @@ jobs:
           persist-credentials: false
       # Each target is its runner's host, which the toolchain that
       # rust-toolchain.toml pins already includes.
+      - name: Use wild linker
+        if: runner.os == 'Linux'
+        # Link the Linux binary with wild, a much faster linker. The action
+        # installs wild and points Cargo at it through ~/.cargo/config.toml
+        # for the linux-gnu target; clang, its driver, ships on the runner.
+        # It only writes Linux targets, so the macOS build is untouched.
+        uses: wild-linker/action@df0907881edceed370dee3c817eecf8a890430ad # 0.11.0
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }}
       - name: Package
